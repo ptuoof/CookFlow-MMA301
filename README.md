@@ -1,56 +1,86 @@
-# Welcome to your Expo app 👋
+# 🍳 CookFlow - Trợ Lý Nấu Ăn Di Động Thông Minh (iOS Aesthetic)
+> **Đồ án môn học:** MMA301 - Multiplatform Mobile App Development (FPT University)  
+> **Framework:** React Native (Expo SDK 57, TypeScript)  
+> **Phong cách UI:** Chuẩn Apple iOS Human Interface Guidelines (Cozy Pastel, Bo tròn Squircle 24-32px, Đổ bóng mềm Soft Shadow, Animation mượt mà, Thẻ nổi)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+---
 
-## Get started
+## 🌟 1. Điểm nổi bật của dự án
 
-1. Install dependencies
+1. **Giao diện chuẩn iOS Apple & Dễ thương (Cute Aesthetic):**
+   * Gam màu pastel ấm cúng ẩm thực: Coral hồng đào ấm (`#FF6B6B`), Mint tươi mát (`#38D9A9`), Vàng mật ong (`#FFD43B`), Tím oải hương (`#9775FA`), nền trắng kem ấm (`#FBF9F6`).
+   * Component bo góc tròn trịa (Radius 24-32px), đổ bóng mềm chuẩn iOS, hiệu ứng bấm phản hồi thu nhỏ (Scale feedback 0.94 - 0.97).
+   * Floating Tab Bar bo tròn nổi ở chân màn hình cực kỳ hiện đại.
 
-   ```bash
-   npm install
-   ```
+2. **Chế độ Nấu ăn tập trung (Cooking Mode Wizard):**
+   * Toàn màn hình (Full-screen Immersive).
+   * Chia nhỏ công thức thành từng bước rõ ràng, hiển thị font chữ to dễ đọc khi đứng cách 1-2 mét trong bếp.
+   * Thanh tiến trình phần trăm (%) hoàn thành mượt mà.
+   * Hộp gợi ý mẹo nấu ăn (Cooking Tips) màu vàng ấm áp.
+   * Màn hình chúc mừng (Celebration Modal) khi hoàn thành món ăn!
 
-2. Start the app
+3. **Bộ đếm giờ thông minh (Interactive Step Timer):**
+   * Vòng đếm ngược to bản kiểu Apple Clock.
+   * Nút bấm Bắt đầu, Tạm dừng, Đặt lại, Cộng thêm 1 phút.
+   * Đổi màu sinh động theo trạng thái (Sẵn sàng ➡️ Đang đếm lửa bập bùng 🔥 ➡️ Đã hết giờ rung chuông 🔔).
 
-   ```bash
-   npx expo start
-   ```
+4. **Quản lý dữ liệu CRUD & Local Storage:**
+   * Sử dụng Mock Data phong phú (6 món ăn chi tiết, có sẵn các bước hẹn giờ thực tế).
+   * Kết hợp `@react-native-async-storage/async-storage` + React Context API.
+   * Hỗ trợ đầy đủ 4 thao tác:
+     * **Create:** Tạo công thức mới với form động (thêm bớt nguyên liệu & bước có timer).
+     * **Read:** Tìm kiếm, lọc theo danh mục, xem chi tiết món kèm checklist nguyên liệu.
+     * **Update:** Chỉnh sửa công thức cá nhân đã tạo.
+     * **Delete:** Xóa công thức cá nhân (có Alert xác nhận).
+     * **Favorite:** Thả tim lưu món yêu thích tức thì.
 
-In the output, you'll find options to open the app in a
+---
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+## 🚀 2. Hướng dẫn khởi chạy trên Máy ảo (Android Emulator / VS Code)
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
+### Bước 1: Mở terminal tại thư mục dự án
 ```bash
-npm run reset-project
+cd CookFlow
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+### Bước 2: Khởi động máy ảo Android
+* Bật máy ảo Android (Pixel 6/7/8 qua Android Studio hoặc Visual Studio).
 
-### Other setup steps
+### Bước 3: Chạy ứng dụng
+```bash
+npm run android
+```
+*(Hoặc gõ `npx expo start` rồi nhấn phím `a` để mở trên Android Emulator).*
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+---
 
-## Learn more
+## 📂 3. Cấu trúc thư mục mã nguồn
 
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+```
+CookFlow/
+├── src/
+│   ├── app/
+│   │   ├── _layout.tsx           # Root layout bọc RecipeProvider & StatusBar
+│   │   ├── index.tsx             # Màn hình chính (Header, Search, Filters, Grid món, Floating TabBar)
+│   │   └── explore.tsx           # Redirect route
+│   ├── components/
+│   │   ├── ui/
+│   │   │   ├── AppleButton.tsx   # Nút bấm chuẩn Apple (nhiều màu, scale touch)
+│   │   │   ├── AppleBadge.tsx    # Pill badges xinh xắn
+│   │   │   └── TimerCircle.tsx   # Vòng đếm giờ Timer đếm ngược
+│   │   ├── RecipeDetailModal.tsx # Modal chi tiết món ăn & checklist nguyên liệu
+│   │   ├── CookingModeModal.tsx  # Chế độ nấu ăn từng bước + màn hình chúc mừng
+│   │   ├── CreateRecipeModal.tsx # Form tạo / sửa công thức động (CRUD)
+│   │   ├── MyRecipesView.tsx     # Quản lý món yêu thích & món tự tạo (Sửa/Xóa)
+│   │   └── SettingsModal.tsx     # Cài đặt âm thanh, rung, giữ sáng màn hình & thông tin đồ án
+│   ├── constants/
+│   │   └── theme.ts              # Bảng màu AppleColors, Radius, AppleShadow
+│   ├── context/
+│   │   └── RecipeContext.tsx     # Quản lý State toàn cục & lưu trữ AsyncStorage
+│   ├── data/
+│   │   └── mockRecipes.ts        # Dữ liệu 6 món ăn mẫu với các bước hẹn giờ
+│   └── types/
+│       └── recipe.ts             # Định nghĩa kiểu dữ liệu TypeScript
+├── package.json
+└── app.json
+```

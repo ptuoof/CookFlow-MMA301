@@ -38,6 +38,10 @@ yarn-error.*
 
 example
 
+# IDE & AI Assistant
+.vscode/
+.claude/
+
 # generated native folders
 /ios
 /android
