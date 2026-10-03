@@ -1,6 +1,6 @@
 # 🍳 CookFlow - Trợ Lý Nấu Ăn Di Động Thông Minh (iOS Aesthetic)
 > **Đồ án môn học:** MMA301 - Multiplatform Mobile App Development (FPT University)  
-> **Framework:** React Native (Expo SDK 57, TypeScript)  
+> **Framework:** React Native (Expo SDK 57, JavaScript ES6+ / JSX)  
 > **Phong cách UI:** Chuẩn Apple iOS Human Interface Guidelines (Cozy Pastel, Bo tròn Squircle 24-32px, Đổ bóng mềm Soft Shadow, Animation mượt mà, Thẻ nổi)
 
 ---
@@ -60,27 +60,27 @@ npm run android
 CookFlow/
 ├── src/
 │   ├── app/
-│   │   ├── _layout.tsx           # Root layout bọc RecipeProvider & StatusBar
-│   │   ├── index.tsx             # Màn hình chính (Header, Search, Filters, Grid món, Floating TabBar)
-│   │   └── explore.tsx           # Redirect route
+│   │   ├── _layout.jsx           # Root layout bọc RecipeProvider & StatusBar
+│   │   ├── index.jsx             # Màn hình chính (Header, Search, Filters, Grid món, Floating TabBar)
+│   │   └── explore.jsx           # Redirect route
 │   ├── components/
 │   │   ├── ui/
-│   │   │   ├── AppleButton.tsx   # Nút bấm chuẩn Apple (nhiều màu, scale touch)
-│   │   │   ├── AppleBadge.tsx    # Pill badges xinh xắn
-│   │   │   └── TimerCircle.tsx   # Vòng đếm giờ Timer đếm ngược
-│   │   ├── RecipeDetailModal.tsx # Modal chi tiết món ăn & checklist nguyên liệu
-│   │   ├── CookingModeModal.tsx  # Chế độ nấu ăn từng bước + màn hình chúc mừng
-│   │   ├── CreateRecipeModal.tsx # Form tạo / sửa công thức động (CRUD)
-│   │   ├── MyRecipesView.tsx     # Quản lý món yêu thích & món tự tạo (Sửa/Xóa)
-│   │   └── SettingsModal.tsx     # Cài đặt âm thanh, rung, giữ sáng màn hình & thông tin đồ án
+│   │   │   ├── AppleButton.jsx   # Nút bấm chuẩn Apple (nhiều màu, scale touch)
+│   │   │   ├── AppleBadge.jsx    # Pill badges xinh xắn
+│   │   │   └── TimerCircle.jsx   # Vòng đếm giờ Timer đếm ngược
+│   │   ├── RecipeDetailModal.jsx # Modal chi tiết món ăn & checklist nguyên liệu
+│   │   ├── CookingModeModal.jsx  # Chế độ nấu ăn từng bước + màn hình chúc mừng
+│   │   ├── CreateRecipeModal.jsx # Form tạo / sửa công thức động (CRUD)
+│   │   ├── MyRecipesView.jsx     # Quản lý món yêu thích & món tự tạo (Sửa/Xóa)
+│   │   └── SettingsModal.jsx     # Cài đặt âm thanh, rung, giữ sáng màn hình & thông tin đồ án
 │   ├── constants/
-│   │   └── theme.ts              # Bảng màu AppleColors, Radius, AppleShadow
+│   │   └── theme.js              # Bảng màu AppleColors, Radius, AppleShadow
 │   ├── context/
-│   │   └── RecipeContext.tsx     # Quản lý State toàn cục & lưu trữ AsyncStorage
+│   │   └── RecipeContext.jsx     # Quản lý State toàn cục & lưu trữ AsyncStorage
 │   ├── data/
-│   │   └── mockRecipes.ts        # Dữ liệu 6 món ăn mẫu với các bước hẹn giờ
+│   │   └── mockRecipes.js        # Dữ liệu 6 món ăn mẫu với các bước hẹn giờ
 │   └── types/
-│       └── recipe.ts             # Định nghĩa kiểu dữ liệu TypeScript
+│       └── recipe.js             # Danh mục và hằng số hỗ trợ
 ├── package.json
 └── app.json
 ```

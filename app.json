@@ -41,9 +41,6 @@
           "cameraPermission": "Ứng dụng cần quyền sử dụng máy ảnh để chụp ảnh món ăn."
         }
       ]
-    ],
-    "experiments": {
-      "typedRoutes": true
-    }
+    ]
   }
 }
