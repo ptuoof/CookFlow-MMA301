@@ -20,6 +20,7 @@ import { MyRecipesView } from '../components/MyRecipesView';
 import { SettingsModal } from '../components/SettingsModal';
 import { OnboardingModal } from '../components/OnboardingModal';
 import { ShoppingListModal } from '../components/ShoppingListModal';
+import { FloatingTimerWidget } from '../components/ui/FloatingTimerWidget';
 
 const CATEGORIES: Category[] = [
   'Tất cả',
@@ -33,6 +34,8 @@ const CATEGORIES: Category[] = [
 export default function AppMainScreen() {
   const {
     recipes,
+    activeRecipeForCooking,
+    setActiveRecipeForCooking,
     selectedCategory,
     setSelectedCategory,
     searchQuery,
@@ -48,7 +51,7 @@ export default function AppMainScreen() {
 
   // Modals state
   const [selectedRecipeForDetail, setSelectedRecipeForDetail] = useState<Recipe | null>(null);
-  const [activeRecipeForCooking, setActiveRecipeForCooking] = useState<Recipe | null>(null);
+  const [isCookingVisible, setIsCookingVisible] = useState(false);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState<Recipe | null>(null);
   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
@@ -400,14 +403,16 @@ export default function AppMainScreen() {
           recipe={selectedRecipeForDetail}
           visible={!!selectedRecipeForDetail}
           onClose={() => setSelectedRecipeForDetail(null)}
-          onStartCooking={(rec) => setActiveRecipeForCooking(rec)}
+          onStartCooking={(rec) => { setActiveRecipeForCooking(rec); setIsCookingVisible(true); }}
         />
 
         <CookingModeModal
           recipe={activeRecipeForCooking}
-          visible={!!activeRecipeForCooking}
-          onClose={() => setActiveRecipeForCooking(null)}
+          visible={!!activeRecipeForCooking && isCookingVisible}
+          onClose={() => setIsCookingVisible(false)}
         />
+
+        {!isCookingVisible ? <FloatingTimerWidget onPress={() => setIsCookingVisible(true)} /> : null}
 
         <CreateRecipeModal
           visible={isCreateModalVisible}

@@ -4,6 +4,8 @@ import { Recipe, Category, Ingredient, ShoppingItem } from '../types/recipe';
 import { INITIAL_RECIPES } from '../data/mockRecipes';
 
 interface RecipeContextType {
+  cookingTimer: { recipeId: string; recipeTitle: string; stepTitle: string; secondsLeft: number; running: boolean; initialSeconds: number } | null;
+  setCookingTimer: React.Dispatch<React.SetStateAction<RecipeContextType['cookingTimer']>>;
   recipes: Recipe[];
   favoriteIds: string[];
   selectedCategory: Category;
@@ -80,6 +82,7 @@ export const safeStorage = {
 };
 
 export const RecipeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [cookingTimer, setCookingTimer] = useState<RecipeContextType['cookingTimer']>(null);
   const [recipes, setRecipes] = useState<Recipe[]>(INITIAL_RECIPES);
   const [favoriteIds, setFavoriteIds] = useState<string[]>(['rec_01', 'rec_03']);
   const [selectedCategory, setSelectedCategory] = useState<Category>('Tất cả');
@@ -112,6 +115,14 @@ export const RecipeProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     loadPersistedData();
   }, []);
+
+  useEffect(() => {
+    if (!cookingTimer?.running) return;
+    const interval = setInterval(() => setCookingTimer((timer) => timer && timer.running
+      ? { ...timer, secondsLeft: Math.max(0, timer.secondsLeft - 1), running: timer.secondsLeft > 1 }
+      : timer), 1000);
+    return () => clearInterval(interval);
+  }, [cookingTimer?.running]);
 
   const loadPersistedData = async () => {
     try {
@@ -257,6 +268,8 @@ export const RecipeProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   return (
     <RecipeContext.Provider
       value={{
+        cookingTimer,
+        setCookingTimer,
         recipes,
         favoriteIds,
         selectedCategory,
