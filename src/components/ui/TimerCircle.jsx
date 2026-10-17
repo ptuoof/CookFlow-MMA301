@@ -1,51 +1,45 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { HeronColors, Radius, HeronShadow } from '../../constants/theme';
+import { useRecipes } from '../../context/RecipeContext';
 export const TimerCircle = ({
   initialSeconds,
   onFinish,
-  autoStart = false
+  autoStart = false,
+  stepTitle = ''
 }) => {
-  const [secondsLeft, setSecondsLeft] = useState(initialSeconds);
-  const [isRunning, setIsRunning] = useState(autoStart);
+  const { cookingTimer, setCookingTimer, activeRecipeForCooking } = useRecipes();
   const [isCompleted, setIsCompleted] = useState(false);
-  const timerRef = useRef(null);
+  const secondsLeft = cookingTimer?.secondsLeft ?? initialSeconds;
+  const isRunning = cookingTimer?.running ?? false;
   useEffect(() => {
-    setSecondsLeft(initialSeconds);
+    const sameTimerSession = cookingTimer?.recipeId === activeRecipeForCooking?.id
+      && cookingTimer?.stepTitle === stepTitle;
+    if (!sameTimerSession) {
+      setCookingTimer({ recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: autoStart, initialSeconds });
+    }
     setIsCompleted(false);
-    setIsRunning(autoStart);
-  }, [initialSeconds]);
+  }, [initialSeconds, activeRecipeForCooking?.id, stepTitle]);
   useEffect(() => {
-    if (isRunning && secondsLeft > 0) {
-      timerRef.current = setTimeout(() => {
-        setSecondsLeft(prev => prev - 1);
-      }, 1000);
-    } else if (secondsLeft === 0 && isRunning) {
-      setIsRunning(false);
+    if (secondsLeft === 0 && cookingTimer?.recipeId === activeRecipeForCooking?.id) {
       setIsCompleted(true);
       if (onFinish) onFinish();
     }
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, [isRunning, secondsLeft]);
+  }, [secondsLeft]);
   const toggleRunning = () => {
     if (isCompleted) {
-      setSecondsLeft(initialSeconds);
+      setCookingTimer({ recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: true, initialSeconds });
       setIsCompleted(false);
-      setIsRunning(true);
       return;
     }
-    setIsRunning(!isRunning);
+    setCookingTimer(timer => timer ? { ...timer, running: !timer.running } : { recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: true, initialSeconds });
   };
   const resetTimer = () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    setSecondsLeft(initialSeconds);
-    setIsRunning(false);
+    setCookingTimer({ recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: false, initialSeconds });
     setIsCompleted(false);
   };
   const addOneMinute = () => {
-    setSecondsLeft(prev => prev + 60);
+    setCookingTimer(timer => timer ? { ...timer, secondsLeft: timer.secondsLeft + 60, initialSeconds: timer.initialSeconds + 60 } : timer);
     setIsCompleted(false);
   };
   const formatTime = totalSeconds => {

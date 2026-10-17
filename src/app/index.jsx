@@ -11,10 +11,13 @@ import { MyRecipesView } from '../components/MyRecipesView';
 import { SettingsModal } from '../components/SettingsModal';
 import { OnboardingModal } from '../components/OnboardingModal';
 import { ShoppingListModal } from '../components/ShoppingListModal';
+import { FloatingTimerWidget } from '../components/ui/FloatingTimerWidget';
 const CATEGORIES = ['Tất cả', 'Món nhanh ⚡', 'Món chính 🍲', 'Ăn kiêng 🥗', 'Tráng miệng 🍰', 'Thức uống 🍹'];
 export default function AppMainScreen() {
   const {
     recipes,
+    activeRecipeForCooking,
+    setActiveRecipeForCooking,
     selectedCategory,
     setSelectedCategory,
     searchQuery,
@@ -30,7 +33,7 @@ export default function AppMainScreen() {
 
   // Modals state
   const [selectedRecipeForDetail, setSelectedRecipeForDetail] = useState(null);
-  const [activeRecipeForCooking, setActiveRecipeForCooking] = useState(null);
+  const [isCookingVisible, setIsCookingVisible] = useState(false);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState(null);
   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
@@ -303,9 +306,11 @@ export default function AppMainScreen() {
         </View>
 
         {/* Modals */}
-        <RecipeDetailModal recipe={selectedRecipeForDetail} visible={!!selectedRecipeForDetail} onClose={() => setSelectedRecipeForDetail(null)} onStartCooking={rec => setActiveRecipeForCooking(rec)} />
+        <RecipeDetailModal recipe={selectedRecipeForDetail} visible={!!selectedRecipeForDetail} onClose={() => setSelectedRecipeForDetail(null)} onStartCooking={rec => { setActiveRecipeForCooking(rec); setIsCookingVisible(true); }} />
 
-        <CookingModeModal recipe={activeRecipeForCooking} visible={!!activeRecipeForCooking} onClose={() => setActiveRecipeForCooking(null)} />
+        <CookingModeModal recipe={activeRecipeForCooking} visible={!!activeRecipeForCooking && isCookingVisible} onClose={() => setIsCookingVisible(false)} />
+
+        {!isCookingVisible ? <FloatingTimerWidget onPress={() => setIsCookingVisible(true)} /> : null}
 
         <CreateRecipeModal visible={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} editingRecipe={editingRecipe} />
 

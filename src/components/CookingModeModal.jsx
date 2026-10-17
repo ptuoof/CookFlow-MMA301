@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { TimerCircle } from './ui/TimerCircle';
 import { StepVideoPlayer } from './ui/StepVideoPlayer';
 import { AppleButton } from './ui/AppleButton';
+import * as Speech from 'expo-speech';
 export const CookingModeModal = ({
   recipe,
   visible,
@@ -13,11 +14,28 @@ export const CookingModeModal = ({
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isCelebrationVisible, setIsCelebrationVisible] = useState(false);
   const [viewMode, setViewMode] = useState('video');
-  if (!recipe) return null;
-  const currentStep = recipe.steps[currentStepIndex];
-  const totalSteps = recipe.steps.length;
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const currentStep = recipe?.steps[currentStepIndex];
+  const totalSteps = recipe?.steps.length ?? 0;
   const progressPercent = Math.round((currentStepIndex + 1) / totalSteps * 100);
   const isLastStep = currentStepIndex === totalSteps - 1;
+  useEffect(() => {
+    setCurrentStepIndex(0);
+    setVoiceEnabled(false);
+  }, [recipe?.id]);
+  useEffect(() => {
+    if (visible && voiceEnabled && currentStep) {
+      Speech.stop();
+      Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, { language: 'vi-VN' });
+    }
+    return () => { Speech.stop(); };
+  }, [visible, voiceEnabled, recipe?.id, currentStepIndex]);
+  const speakCurrentStep = () => {
+    if (!currentStep) return;
+    Speech.stop();
+    Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, { language: 'vi-VN' });
+  };
+  if (!recipe || !currentStep) return null;
   const handleNext = () => {
     if (isLastStep) {
       setIsCelebrationVisible(true);
@@ -38,7 +56,6 @@ export const CookingModeModal = ({
       text: 'Thoát ra',
       style: 'destructive',
       onPress: () => {
-        setCurrentStepIndex(0);
         onClose();
       }
     }]);
@@ -55,6 +72,10 @@ export const CookingModeModal = ({
           <View style={styles.headerTopRow}>
             <Pressable onPress={handleExit} style={styles.exitButton}>
               <Text style={styles.exitText}>✕ ĐÓNG</Text>
+            </Pressable>
+
+            <Pressable onPress={() => setVoiceEnabled(enabled => !enabled)} style={styles.exitButton}>
+              <Text style={styles.exitText}>{voiceEnabled ? '🔊 TẮT ĐỌC' : '🔊 ĐỌC TỰ ĐỘNG'}</Text>
             </Pressable>
 
             <View style={styles.phaseBadge}>
@@ -109,6 +130,10 @@ export const CookingModeModal = ({
 
             <Text style={styles.stepTitle}>{currentStep.title}</Text>
             <Text style={styles.stepInstruction}>{currentStep.instruction}</Text>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <Pressable onPress={() => { Speech.stop(); setVoiceEnabled(false); }} style={styles.voiceControl}><Text style={styles.voiceControlText}>Dừng đọc</Text></Pressable>
+              <Pressable onPress={speakCurrentStep} style={styles.voiceControl}><Text style={styles.voiceControlText}>Nghe lại</Text></Pressable>
+            </View>
 
             {/* Mẹo nhỏ (Tip) */}
             {currentStep.tip ? <View style={styles.tipBox}>
@@ -127,7 +152,7 @@ export const CookingModeModal = ({
                   </Text>
                 </View>
 
-                <TimerCircle key={`timer_${recipe.id}_${currentStepIndex}`} initialSeconds={currentStep.timerSeconds || 180} onFinish={() => {
+                <TimerCircle key={`timer_${recipe.id}_${currentStepIndex}`} initialSeconds={currentStep.timerSeconds || 180} stepTitle={currentStep.title} onFinish={() => {
               Alert.alert('⏰ ĐÃ HẾT GIỜ BƯỚC NẤU!', `Bạn đã hoàn thành giai đoạn "${currentStep.title}". Hãy chuyển sang bước tiếp theo để đảm bảo hương vị chuẩn nhất!`, [{
                 text: 'ĐÃ HIỂU ✓'
               }]);
@@ -210,6 +235,8 @@ const styles = StyleSheet.create({
     color: HeronColors.secondary,
     letterSpacing: 0.5
   },
+  voiceControl: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: Radius.full, backgroundColor: HeronColors.cardAlt },
+  voiceControlText: { color: HeronColors.primary, fontSize: 12, fontWeight: '700' },
   phaseBadge: {
     flexDirection: 'row',
     alignItems: 'center',
