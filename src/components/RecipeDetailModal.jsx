@@ -7,7 +7,7 @@ import { useRecipes } from '../context/RecipeContext';
 import { AiChefChatModal, SOUS_CHEF_SUGGESTIONS } from './AiChefChatModal';
 import { ShareRecipeModal } from './ShareRecipeModal';
 export const RecipeDetailModal = ({
-  recipe,
+  recipe: recipeProp,
   visible,
   onClose,
   onStartCooking
@@ -15,13 +15,16 @@ export const RecipeDetailModal = ({
   const {
     toggleFavorite,
     isFavorite,
-    addToShoppingList
+    addToShoppingList,
+    getRecipeById
   } = useRecipes();
   const [checkedIngredients, setCheckedIngredients] = useState({});
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
   const [aiQuestion, setAiQuestion] = useState(null);
   const [isShareVisible, setIsShareVisible] = useState(false);
-  if (!recipe) return null;
+  if (!recipeProp) return null;
+  // Read the live copy so edits made while open (e.g. AI substitutions) show immediately
+  const recipe = getRecipeById(recipeProp.id) || recipeProp;
   const isFav = isFavorite(recipe.id);
   const toggleCheck = id => {
     setCheckedIngredients(prev => ({
@@ -87,6 +90,17 @@ export const RecipeDetailModal = ({
             <Text style={styles.title}>{recipe.title}</Text>
             <Text style={styles.description}>{recipe.description}</Text>
           </View>
+
+          {/* Personal copy adjusted by AI Sous-Chef */}
+          {recipe.aiChanges?.length ? <View style={styles.aiChangesBox}>
+              <Text style={styles.aiChangesTag}>✨ BẢN CỦA TÔI // ĐÃ ĐIỀU CHỈNH THEO GỢI Ý AI</Text>
+              {recipe.aiChanges.map((note, idx) => <Text key={idx} style={styles.aiChangesText}>
+                  • {note}
+                </Text>)}
+              <Text style={styles.aiChangesFoot}>
+                Các bước nấu vẫn giữ như công thức gốc — nhớ dùng nguyên liệu đã thay ở trên.
+              </Text>
+            </View> : null}
 
           {/* Precision Stats Bar (Heron Grid Style) */}
           <View style={styles.statsGrid}>
@@ -564,6 +578,34 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     marginTop: Spacing.md,
     gap: 8
+  },
+  aiChangesBox: {
+    backgroundColor: HeronColors.amberLight,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: '#FFE8A3',
+    padding: 14,
+    marginBottom: Spacing.lg,
+    gap: 4
+  },
+  aiChangesTag: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: HeronColors.amber,
+    letterSpacing: 0.8,
+    marginBottom: 2
+  },
+  aiChangesText: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600',
+    color: HeronColors.primary
+  },
+  aiChangesFoot: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: HeronColors.granite,
+    marginTop: 4
   },
   aiCard: {
     backgroundColor: '#FFFFFF',

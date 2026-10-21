@@ -69,18 +69,11 @@ const stripMarkdown = text =>
     .replace(/^\s*[-*]\s+/gm, '• ')
     .trim();
 
-/**
- * Sends a question to Gemini with the recipe as context.
- * @param history previous messages [{ role: 'user' | 'model', text }]
- * @returns the assistant reply text. Throws Error with a user-facing message on failure.
- */
-export const askSousChef = async ({ apiKey, recipe, currentStep, history = [], question, signal }) => {
-  if (!apiKey) throw new Error('Chưa có API key Gemini.');
+const toContents = messages => messages.map(m => ({ role: m.role, parts: [{ text: m.text }] }));
 
-  const contents = [...history.slice(-MAX_HISTORY_MESSAGES), { role: 'user', text: question }].map(m => ({
-    role: m.role,
-    parts: [{ text: m.text }]
-  }));
+// Shared HTTP call: timeout, abort, error mapping. Returns the reply text.
+const generateContent = async ({ apiKey, systemPrompt, messages, generationConfig, signal }) => {
+  if (!apiKey) throw new Error('Chưa có API key Gemini.');
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -93,9 +86,9 @@ export const askSousChef = async ({ apiKey, recipe, currentStep, history = [], q
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: buildSystemPrompt(recipe, currentStep) }] },
-        contents,
-        generationConfig: { temperature: 0.7 }
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: toContents(messages),
+        generationConfig
       }),
       signal: controller.signal
     });
@@ -119,5 +112,108 @@ export const askSousChef = async ({ apiKey, recipe, currentStep, history = [], q
     .map(p => p.text || '')
     .join('');
   if (!text.trim()) throw new Error('Gemini không trả lời được câu này. Thử hỏi cách khác nhé.');
+  return text;
+};
+
+/**
+ * Sends a question to Gemini with the recipe as context.
+ * @param history previous messages [{ role: 'user' | 'model', text }]
+ * @returns the assistant reply text. Throws Error with a user-facing message on failure.
+ */
+export const askSousChef = async ({ apiKey, recipe, currentStep, history = [], question, signal }) => {
+  const text = await generateContent({
+    apiKey,
+    systemPrompt: buildSystemPrompt(recipe, currentStep),
+    messages: [...history.slice(-MAX_HISTORY_MESSAGES), { role: 'user', text: question }],
+    generationConfig: { temperature: 0.7 },
+    signal
+  });
   return stripMarkdown(text);
+};
+
+// Structured output: each change replaces one existing ingredient (by id) with 0..n new ingredients.
+const CHANGES_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    changes: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          replacesId: { type: 'STRING' },
+          items: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: {
+                name: { type: 'STRING' },
+                amount: { type: 'STRING' },
+                unit: { type: 'STRING' }
+              },
+              required: ['name', 'amount', 'unit']
+            }
+          },
+          reason: { type: 'STRING' }
+        },
+        required: ['replacesId', 'items']
+      }
+    }
+  },
+  required: ['changes']
+};
+
+const buildExtractionPrompt = recipe =>
+  [
+    'Bạn là bộ chuyển đổi dữ liệu cho ứng dụng nấu ăn CookFlow.',
+    'Đọc câu trả lời của phụ bếp AI và chuyển các gợi ý THAY THẾ hoặc ĐỔI ĐỊNH LƯỢNG nguyên liệu thành JSON.',
+    'Quy tắc:',
+    '• replacesId PHẢI là một id trong danh sách nguyên liệu bên dưới (ví dụ "i2"). Không có id phù hợp thì bỏ qua gợi ý đó.',
+    '• items là các nguyên liệu mới thay cho nguyên liệu gốc (có thể 1 hoặc nhiều thứ, ví dụ nước mắm + nước lọc). Chỉ đổi định lượng thì items gồm đúng nguyên liệu đó với định lượng mới. Bỏ hẳn nguyên liệu thì items rỗng.',
+    '• Định lượng tính cho đúng khẩu phần của công thức, amount là số hoặc chữ ngắn (ví dụ "60", "1/2", "Vừa đủ").',
+    '• Nếu câu trả lời đưa nhiều phương án cho cùng một nguyên liệu, chỉ chọn phương án đầu tiên.',
+    '• Không đổi các bước nấu. Không có thay đổi nguyên liệu cụ thể nào thì trả về changes rỗng.',
+    '• reason: một câu ngắn tiếng Việt giải thích.',
+    '',
+    `Món: ${recipe.title} (${recipe.servings} người ăn)`,
+    'Nguyên liệu (id: tên — định lượng):',
+    ...recipe.ingredients.map(i => `${i.id}: ${i.name} — ${i.amount} ${i.unit}`)
+  ].join('\n');
+
+const cleanText = (value, max = 80) => (typeof value === 'string' || typeof value === 'number' ? String(value).trim().slice(0, max) : '');
+
+/**
+ * Turns a free-text Sous-Chef answer into structured ingredient changes for the given recipe.
+ * Only changes pointing at real ingredient ids are kept (one per ingredient).
+ * @returns [{ replacesId, original, items: [{ name, amount, unit }], reason }]
+ */
+export const extractIngredientChanges = async ({ apiKey, recipe, question, answer, signal }) => {
+  const text = await generateContent({
+    apiKey,
+    systemPrompt: buildExtractionPrompt(recipe),
+    messages: [
+      { role: 'user', text: `Câu hỏi của người dùng: ${question}\n\nCâu trả lời của phụ bếp AI:\n${answer}` }
+    ],
+    generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: CHANGES_SCHEMA },
+    signal
+  });
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('Không đọc được gợi ý thay thế từ Gemini. Thử lại nhé.');
+  }
+
+  const byId = new Map(recipe.ingredients.map(i => [i.id, i]));
+  const seen = new Set();
+  return (Array.isArray(parsed?.changes) ? parsed.changes : []).flatMap(change => {
+    const original = byId.get(change?.replacesId);
+    if (!original || seen.has(original.id)) return [];
+    seen.add(original.id);
+    const items = (Array.isArray(change.items) ? change.items : [])
+      .map(item => ({ name: cleanText(item?.name), amount: cleanText(item?.amount, 20) || 'Vừa đủ', unit: cleanText(item?.unit, 30) }))
+      .filter(item => item.name)
+      .slice(0, 4);
+    return [{ replacesId: original.id, original, items, reason: cleanText(change.reason, 200) }];
+  });
 };

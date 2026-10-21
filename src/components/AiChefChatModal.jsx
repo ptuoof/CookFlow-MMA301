@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Linking } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Linking, Alert } from 'react-native';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { AppleButton } from './ui/AppleButton';
-import { askSousChef, getGeminiApiKey, saveGeminiApiKey, clearGeminiApiKey, GEMINI_KEY_URL } from '../services/gemini';
+import { askSousChef, extractIngredientChanges, getGeminiApiKey, saveGeminiApiKey, clearGeminiApiKey, GEMINI_KEY_URL } from '../services/gemini';
+import { buildPersonalVariant, shoppingItemsForChanges } from '../services/recipeVariant';
+import { useRecipes } from '../context/RecipeContext';
 export const SOUS_CHEF_SUGGESTIONS = [{
   icon: '💡',
   label: 'Thay thế gia vị',
@@ -34,8 +36,17 @@ export const AiChefChatModal = ({
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [applyingId, setApplyingId] = useState(null);
+  const [proposal, setProposal] = useState(null);
+  const {
+    recipes,
+    addRecipe,
+    updateRecipe,
+    addToShoppingList
+  } = useRecipes();
   const scrollRef = useRef(null);
   const abortRef = useRef(null);
+  const applyAbortRef = useRef(null);
   const sentInitialRef = useRef(null);
 
   // Load key whenever the modal opens
@@ -53,9 +64,12 @@ export const AiChefChatModal = ({
   // A new recipe starts a fresh conversation
   useEffect(() => {
     abortRef.current?.abort();
+    applyAbortRef.current?.abort();
     setMessages([]);
     setInput('');
     setIsLoading(false);
+    setApplyingId(null);
+    setProposal(null);
     sentInitialRef.current = null;
   }, [recipe?.id]);
 
@@ -63,11 +77,17 @@ export const AiChefChatModal = ({
   useEffect(() => {
     if (!visible) {
       abortRef.current?.abort();
+      applyAbortRef.current?.abort();
       setIsLoading(false);
+      setApplyingId(null);
+      setProposal(null);
       sentInitialRef.current = null;
     }
   }, [visible]);
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    applyAbortRef.current?.abort();
+  }, []);
   const sendQuestion = async question => {
     const text = question.trim();
     if (!text || isLoading || !apiKey) return;
@@ -97,7 +117,8 @@ export const AiChefChatModal = ({
       setMessages(prev => [...prev, {
         id: `m_${Date.now()}`,
         role: 'model',
-        text: reply
+        text: reply,
+        question: text
       }]);
     } catch (e) {
       if (controller.signal.aborted) return;
@@ -123,6 +144,89 @@ export const AiChefChatModal = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, apiKey, initialQuestion]);
+  const setMessageNote = (id, applyNote) => setMessages(prev => prev.map(m => m.id === id ? {
+    ...m,
+    applyNote
+  } : m));
+
+  // Turn a free-text answer into concrete ingredient changes the user can review
+  const handleApply = async message => {
+    if (applyingId || !recipe) return;
+    setApplyingId(message.id);
+    setMessageNote(message.id, null);
+    const controller = new AbortController();
+    applyAbortRef.current = controller;
+    try {
+      const changes = await extractIngredientChanges({
+        apiKey,
+        recipe: liveRecipe,
+        question: message.question,
+        answer: message.text,
+        signal: controller.signal
+      });
+      if (controller.signal.aborted) return;
+      if (changes.length === 0) {
+        setMessageNote(message.id, 'Câu trả lời này không có thay đổi nguyên liệu cụ thể để áp dụng.');
+        return;
+      }
+      setProposal({
+        changes,
+        selected: Object.fromEntries(changes.map(c => [c.replacesId, true])),
+        cartDone: false,
+        savedTitle: null
+      });
+    } catch (e) {
+      if (!controller.signal.aborted) setMessageNote(message.id, `⚠ ${e.message}`);
+    } finally {
+      if (applyAbortRef.current === controller) {
+        applyAbortRef.current = null;
+        setApplyingId(null);
+      }
+    }
+  };
+  const selectedChanges = proposal ? proposal.changes.filter(c => proposal.selected[c.replacesId]) : [];
+
+  // Reuse the user's existing personal copy so repeated applies don't pile up duplicates
+  const liveRecipe = recipe ? recipes.find(r => r.id === recipe.id) || recipe : null;
+  const existingVariant = liveRecipe && !liveRecipe.variantOf ? recipes.find(r => r.variantOf === liveRecipe.id) : null;
+  const toggleChange = id => setProposal(prev => ({
+    ...prev,
+    selected: {
+      ...prev.selected,
+      [id]: !prev.selected[id]
+    }
+  }));
+  const handleAddToCart = () => {
+    const items = shoppingItemsForChanges(selectedChanges);
+    if (items.length === 0) {
+      Alert.alert('Không có gì để mua', 'Các thay đổi đã chọn chỉ bỏ bớt nguyên liệu.');
+      return;
+    }
+    addToShoppingList(items, `${recipe.title} • thay thế AI`);
+    setProposal(prev => ({
+      ...prev,
+      cartDone: true
+    }));
+  };
+  const handleSaveVariant = () => {
+    const target = existingVariant || liveRecipe;
+    const targetIds = new Set(target.ingredients.map(i => i.id));
+    const applicable = selectedChanges.filter(c => targetIds.has(c.replacesId));
+    if (applicable.length === 0) {
+      Alert.alert('Đã áp dụng trước đó', `Các nguyên liệu này đã được thay trong "${target.title}".`);
+      return;
+    }
+    const result = buildPersonalVariant(target, applicable);
+    if (result.mode === 'update') {
+      updateRecipe(result.recipe);
+    } else {
+      addRecipe(result.recipe);
+    }
+    setProposal(prev => ({
+      ...prev,
+      savedTitle: result.recipe.title
+    }));
+  };
   const handleSaveKey = async () => {
     const key = keyDraft.trim();
     if (!key) return;
@@ -165,6 +269,52 @@ export const AiChefChatModal = ({
           </View> : null}
       </View>
     </ScrollView>;
+  const renderProposal = () => <View style={styles.proposalOverlay}>
+      <View style={styles.proposalCard}>
+        <Text style={styles.proposalTag}>ÁP DỤNG GỢI Ý // AI</Text>
+        <Text style={styles.proposalTitle}>Chọn thay đổi muốn áp dụng</Text>
+
+        <ScrollView style={styles.proposalList} contentContainerStyle={{
+        gap: 8
+      }}>
+          {proposal.changes.map(c => {
+          const isOn = !!proposal.selected[c.replacesId];
+          return <Pressable key={c.replacesId} onPress={() => toggleChange(c.replacesId)} style={[styles.changeRow, !isOn && styles.changeRowOff]}>
+                <View style={[styles.checkbox, isOn && styles.checkboxOn]}>
+                  {isOn ? <Text style={styles.checkmark}>✓</Text> : null}
+                </View>
+                <View style={{
+              flex: 1
+            }}>
+                  <Text style={styles.changeOriginal}>
+                    {c.original.name} · {c.original.amount} {c.original.unit}
+                  </Text>
+                  {c.items.length ? c.items.map((item, idx) => <Text key={idx} style={styles.changeNew}>
+                        → {item.name} · {item.amount} {item.unit}
+                      </Text>) : <Text style={styles.changeNew}>→ Bỏ nguyên liệu này</Text>}
+                  {c.reason ? <Text style={styles.changeReason}>{c.reason}</Text> : null}
+                </View>
+              </Pressable>;
+        })}
+        </ScrollView>
+
+        <Text style={styles.proposalHint}>
+          {existingVariant || liveRecipe?.variantOf ? `Lưu sẽ cập nhật “${(existingVariant || liveRecipe).title}”.` : 'Lưu sẽ tạo bản sao riêng trong Của tôi → Tự tạo. Công thức gốc giữ nguyên.'}
+        </Text>
+
+        <AppleButton title={proposal.cartDone ? '✓ Đã thêm vào giỏ đi chợ' : '🛒 Thêm vào giỏ đi chợ'} variant="outline" onPress={handleAddToCart} disabled={proposal.cartDone || selectedChanges.length === 0} style={{
+        width: '100%'
+      }} />
+        <AppleButton title={proposal.savedTitle ? '✓ Đã lưu vào Của tôi' : '📝 Lưu thành bản của tôi'} variant="primary" onPress={handleSaveVariant} disabled={!!proposal.savedTitle || selectedChanges.length === 0} style={{
+        width: '100%',
+        marginTop: 10
+      }} />
+        {proposal.savedTitle ? <Text style={styles.proposalDone}>Đã lưu “{proposal.savedTitle}”.</Text> : null}
+        <Pressable onPress={() => setProposal(null)} style={styles.proposalClose}>
+          <Text style={styles.proposalCloseText}>{proposal.cartDone || proposal.savedTitle ? 'Xong' : 'Huỷ'}</Text>
+        </Pressable>
+      </View>
+    </View>;
   const renderChat = () => <>
       <ScrollView ref={scrollRef} style={{
       flex: 1
@@ -183,10 +333,23 @@ export const AiChefChatModal = ({
             {m.role === 'model' ? <View style={styles.avatar}>
                 <Text style={styles.avatarText}>🤖</Text>
               </View> : null}
-            <View style={[styles.bubble, m.role === 'user' ? styles.bubbleUser : styles.bubbleModel, m.isError && styles.bubbleError]}>
-              <Text selectable style={[styles.bubbleText, m.role === 'user' && styles.bubbleTextUser, m.isError && styles.bubbleTextError]}>
-                {m.isError ? `⚠ ${m.text}` : m.text}
-              </Text>
+            <View style={styles.bubbleColumn}>
+              <View style={[styles.bubble, m.role === 'user' ? styles.bubbleUser : styles.bubbleModel, m.isError && styles.bubbleError]}>
+                <Text selectable style={[styles.bubbleText, m.role === 'user' && styles.bubbleTextUser, m.isError && styles.bubbleTextError]}>
+                  {m.isError ? `⚠ ${m.text}` : m.text}
+                </Text>
+              </View>
+              {m.role === 'model' && !m.isError && m.question && recipe ? <Pressable onPress={() => handleApply(m)} disabled={!!applyingId} style={({
+            pressed
+          }) => [styles.applyBtn, !!applyingId && applyingId !== m.id && styles.chipDisabled, {
+            opacity: pressed ? 0.7 : 1
+          }]}>
+                  {applyingId === m.id ? <ActivityIndicator size="small" color={HeronColors.brand} /> : null}
+                  <Text style={styles.applyBtnText}>
+                    {applyingId === m.id ? 'Đang phân tích gợi ý...' : '✨ Áp dụng vào giỏ / công thức'}
+                  </Text>
+                </Pressable> : null}
+              {m.applyNote ? <Text style={styles.applyNote}>{m.applyNote}</Text> : null}
             </View>
           </View>)}
 
@@ -254,6 +417,8 @@ export const AiChefChatModal = ({
         {apiKey === null ? <ActivityIndicator style={{
         marginTop: 40
       }} color={HeronColors.brand} /> : showKeySetup ? renderKeySetup() : renderChat()}
+
+        {proposal ? renderProposal() : null}
       </KeyboardAvoidingView>
     </Modal>;
 };
@@ -419,8 +584,143 @@ const styles = StyleSheet.create({
   avatarText: {
     fontSize: 14
   },
-  bubble: {
+  bubbleColumn: {
     maxWidth: '82%',
+    flexShrink: 1,
+    alignItems: 'flex-start',
+    gap: 6
+  },
+  applyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: Radius.full,
+    backgroundColor: HeronColors.brandLight,
+    borderWidth: 1,
+    borderColor: '#FFD8CF'
+  },
+  applyBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: HeronColors.brand
+  },
+  applyNote: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: HeronColors.granite,
+    fontStyle: 'italic'
+  },
+  proposalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(40,40,40,0.55)',
+    justifyContent: 'flex-end',
+    zIndex: 50,
+    elevation: 20
+  },
+  proposalCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: Spacing.lg,
+    paddingBottom: Spacing.xl,
+    maxHeight: '88%',
+    ...HeronShadow.dock
+  },
+  proposalTag: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: HeronColors.brand,
+    letterSpacing: 1
+  },
+  proposalTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: HeronColors.primary,
+    marginTop: 2,
+    marginBottom: 12
+  },
+  proposalList: {
+    flexGrow: 0,
+    maxHeight: 320,
+    marginBottom: 12
+  },
+  changeRow: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: HeronColors.border,
+    backgroundColor: HeronColors.cardAlt
+  },
+  changeRowOff: {
+    opacity: 0.5
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: HeronColors.disable,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    marginTop: 1
+  },
+  checkboxOn: {
+    backgroundColor: HeronColors.emerald,
+    borderColor: HeronColors.emerald
+  },
+  checkmark: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+    fontSize: 12
+  },
+  changeOriginal: {
+    fontSize: 12,
+    color: HeronColors.surface,
+    textDecorationLine: 'line-through',
+    marginBottom: 2
+  },
+  changeNew: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: HeronColors.primary
+  },
+  changeReason: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: HeronColors.granite,
+    marginTop: 4
+  },
+  proposalHint: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: HeronColors.granite,
+    marginBottom: 12
+  },
+  proposalDone: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: HeronColors.emerald,
+    textAlign: 'center',
+    marginTop: 8
+  },
+  proposalClose: {
+    alignSelf: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    marginTop: 4
+  },
+  proposalCloseText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: HeronColors.granite
+  },
+  bubble: {
+    maxWidth: '100%',
     borderRadius: Radius.md,
     paddingHorizontal: 14,
     paddingVertical: 10
