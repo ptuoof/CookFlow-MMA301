@@ -122,6 +122,7 @@ export const RecipeProvider = ({
     const updated = [newRecipe, ...recipes];
     setRecipes(updated);
     safeStorage.setItem(STORAGE_KEY_RECIPES, JSON.stringify(updated));
+    return newRecipe;
   };
   const updateRecipe = updatedRecipe => {
     const updated = recipes.map(r => r.id === updatedRecipe.id ? updatedRecipe : r);

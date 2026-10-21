@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Image, Pressable, Share, Alert } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, Image, Pressable, Alert } from 'react-native';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { AppleBadge } from './ui/AppleBadge';
 import { AppleButton } from './ui/AppleButton';
 import { useRecipes } from '../context/RecipeContext';
+import { AiChefChatModal, SOUS_CHEF_SUGGESTIONS } from './AiChefChatModal';
+import { ShareRecipeModal } from './ShareRecipeModal';
 export const RecipeDetailModal = ({
   recipe,
   visible,
@@ -16,6 +18,9 @@ export const RecipeDetailModal = ({
     addToShoppingList
   } = useRecipes();
   const [checkedIngredients, setCheckedIngredients] = useState({});
+  const [isAiChatVisible, setIsAiChatVisible] = useState(false);
+  const [aiQuestion, setAiQuestion] = useState(null);
+  const [isShareVisible, setIsShareVisible] = useState(false);
   if (!recipe) return null;
   const isFav = isFavorite(recipe.id);
   const toggleCheck = id => {
@@ -24,15 +29,9 @@ export const RecipeDetailModal = ({
       [id]: !prev[id]
     }));
   };
-  const handleShare = async () => {
-    try {
-      const ingredientList = recipe.ingredients.map(i => `• ${i.name}: ${i.amount} ${i.unit}`).join('\n');
-      await Share.share({
-        message: `🍳 Công thức món "${recipe.title}" từ CookFlow:\n\n${recipe.description}\n\nNguyên liệu:\n${ingredientList}\n\nChúc bạn nấu ngon miệng! ✨`
-      });
-    } catch (e) {
-      console.log('Share error', e);
-    }
+  const openAiChat = (question = null) => {
+    setAiQuestion(question);
+    setIsAiChatVisible(true);
   };
   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" transparent={false} onRequestClose={onClose}>
       <View style={styles.container}>
@@ -47,7 +46,10 @@ export const RecipeDetailModal = ({
             <Text style={styles.iconText}>✕</Text>
           </Pressable>
           <View style={styles.topActions}>
-            <Pressable onPress={handleShare} style={styles.iconCircle}>
+            <Pressable onPress={() => openAiChat()} style={styles.iconCircle}>
+              <Text style={styles.iconText}>🤖</Text>
+            </Pressable>
+            <Pressable onPress={() => setIsShareVisible(true)} style={styles.iconCircle}>
               <Text style={styles.iconText}>📤</Text>
             </Pressable>
             <Pressable onPress={() => toggleFavorite(recipe.id)} style={[styles.iconCircle, isFav && styles.favActiveCircle]}>
@@ -160,6 +162,36 @@ export const RecipeDetailModal = ({
             </Pressable>
           </View>
 
+          {/* AI Sous-Chef quick questions */}
+          <View style={styles.aiCard}>
+            <View style={styles.aiCardHeader}>
+              <View style={styles.aiAvatar}>
+                <Text style={styles.aiAvatarText}>🤖</Text>
+              </View>
+              <View style={{
+              flex: 1
+            }}>
+                <Text style={styles.aiCardTag}>AI SOUS-CHEF // GEMINI</Text>
+                <Text style={styles.aiCardTitle}>Thiếu nguyên liệu? Hỏi phụ bếp AI</Text>
+              </View>
+            </View>
+            <View style={styles.aiChipsWrap}>
+              {SOUS_CHEF_SUGGESTIONS.map(s => <Pressable key={s.label} onPress={() => openAiChat(s.prompt)} style={({
+              pressed
+            }) => [styles.aiChip, {
+              transform: [{
+                scale: pressed ? 0.96 : 1
+              }]
+            }]}>
+                  <Text style={styles.aiChipText}>{s.icon} {s.label}</Text>
+                </Pressable>)}
+              <Pressable onPress={() => openAiChat()} style={[styles.aiChip, styles.aiChipPrimary]}>
+                <Text style={[styles.aiChipText, {
+                color: '#FFFFFF'
+              }]}>💬 Hỏi tự do</Text>
+              </Pressable>
+            </View>
+          </View>
 
           {/* Tóm tắt các bước theo luồng Heron Wireframe */}
           <View style={styles.sectionWrap}>
@@ -210,6 +242,10 @@ export const RecipeDetailModal = ({
           onStartCooking(recipe);
         }} />
         </View>
+
+        <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={recipe} initialQuestion={aiQuestion} />
+
+        <ShareRecipeModal key={recipe.id} visible={isShareVisible} onClose={() => setIsShareVisible(false)} recipe={recipe} />
       </View>
     </Modal>;
 };
@@ -528,6 +564,66 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     marginTop: Spacing.md,
     gap: 8
+  },
+  aiCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: Radius.lg,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: HeronColors.border,
+    marginBottom: Spacing.xl,
+    ...HeronShadow.subtle
+  },
+  aiCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12
+  },
+  aiAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: HeronColors.brandLight,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  aiAvatarText: {
+    fontSize: 20
+  },
+  aiCardTag: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: HeronColors.brand,
+    letterSpacing: 1
+  },
+  aiCardTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: HeronColors.primary,
+    marginTop: 2
+  },
+  aiChipsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8
+  },
+  aiChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: Radius.full,
+    backgroundColor: HeronColors.cardAlt,
+    borderWidth: 1,
+    borderColor: HeronColors.border
+  },
+  aiChipPrimary: {
+    backgroundColor: HeronColors.primary,
+    borderColor: HeronColors.primary
+  },
+  aiChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: HeronColors.primary
   },
   addShoppingListIcon: {
     fontSize: 16

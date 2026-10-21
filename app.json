@@ -40,7 +40,15 @@
           "photosPermission": "Ứng dụng cần quyền truy cập album ảnh để bạn tải ảnh món ăn lên.",
           "cameraPermission": "Ứng dụng cần quyền sử dụng máy ảnh để chụp ảnh món ăn."
         }
-      ]
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Ứng dụng cần quyền sử dụng máy ảnh để chụp ảnh món ăn và quét mã QR công thức.",
+          "recordAudioAndroid": false
+        }
+      ],
+      "expo-sharing"
     ]
   }
 }

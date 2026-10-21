@@ -5,6 +5,7 @@ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { TimerCircle } from './ui/TimerCircle';
 import { StepVideoPlayer } from './ui/StepVideoPlayer';
 import { AppleButton } from './ui/AppleButton';
+import { AiChefChatModal } from './AiChefChatModal';
 export const CookingModeModal = ({
   recipe,
   visible,
@@ -13,6 +14,7 @@ export const CookingModeModal = ({
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isCelebrationVisible, setIsCelebrationVisible] = useState(false);
   const [viewMode, setViewMode] = useState('video');
+  const [isAiChatVisible, setIsAiChatVisible] = useState(false);
   if (!recipe) return null;
   const currentStep = recipe.steps[currentStepIndex];
   const totalSteps = recipe.steps.length;
@@ -64,7 +66,12 @@ export const CookingModeModal = ({
               </Text>
             </View>
 
-            <Text style={styles.percentText}>{progressPercent}%</Text>
+            <View style={styles.headerRight}>
+              <Pressable onPress={() => setIsAiChatVisible(true)} style={styles.aiButton}>
+                <Text style={styles.aiButtonText}>🤖 AI</Text>
+              </Pressable>
+              <Text style={styles.percentText}>{progressPercent}%</Text>
+            </View>
           </View>
 
           {/* Hairline Progress Track */}
@@ -175,6 +182,8 @@ export const CookingModeModal = ({
           }} />
             </View>
           </View>}
+
+        <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={recipe} currentStep={currentStep} />
       </SafeAreaView>
     </Modal>;
 };
@@ -232,6 +241,25 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: HeronColors.primary,
     letterSpacing: 0.8
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  aiButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: Radius.full,
+    backgroundColor: HeronColors.brandLight,
+    borderWidth: 1,
+    borderColor: '#FFD8CF'
+  },
+  aiButtonText: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: HeronColors.brand,
+    letterSpacing: 0.4
   },
   percentText: {
     fontSize: 12,

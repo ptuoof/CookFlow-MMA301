@@ -11,6 +11,7 @@ import { MyRecipesView } from '../components/MyRecipesView';
 import { SettingsModal } from '../components/SettingsModal';
 import { OnboardingModal } from '../components/OnboardingModal';
 import { ShoppingListModal } from '../components/ShoppingListModal';
+import { QrScannerModal } from '../components/QrScannerModal';
 const CATEGORIES = ['Tất cả', 'Món nhanh ⚡', 'Món chính 🍲', 'Ăn kiêng 🥗', 'Tráng miệng 🍰', 'Thức uống 🍹'];
 export default function AppMainScreen() {
   const {
@@ -36,6 +37,7 @@ export default function AppMainScreen() {
   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
   const [isOnboardingVisible, setIsOnboardingVisible] = useState(false);
   const [isShoppingListVisible, setIsShoppingListVisible] = useState(false);
+  const [isQrScannerVisible, setIsQrScannerVisible] = useState(false);
 
   // Filtered recipes
   const filteredRecipes = useMemo(() => {
@@ -111,6 +113,11 @@ export default function AppMainScreen() {
               {searchQuery.length > 0 ? <Pressable onPress={() => setSearchQuery('')} style={styles.clearSearchBtn}>
                   <Text style={styles.clearSearchText}>✕</Text>
                 </Pressable> : null}
+              {/* Scan a friend's recipe QR code */}
+              <Pressable onPress={() => setIsQrScannerVisible(true)} style={styles.scanQrBtn} hitSlop={6}>
+                <Text style={styles.scanQrIcon}>📷</Text>
+                <Text style={styles.scanQrText}>QUÉT QR</Text>
+              </Pressable>
             </View>
 
             {/* Category Filter Capsules */}
@@ -314,6 +321,8 @@ export default function AppMainScreen() {
         <OnboardingModal visible={!hasSeenOnboarding || isOnboardingVisible} onClose={() => setIsOnboardingVisible(false)} />
 
         <ShoppingListModal visible={isShoppingListVisible} onClose={() => setIsShoppingListVisible(false)} />
+
+        <QrScannerModal visible={isQrScannerVisible} onClose={() => setIsQrScannerVisible(false)} onImported={() => setCurrentTab('myRecipes')} />
       </View>
     </SafeAreaView>;
 }
@@ -454,6 +463,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: HeronColors.disable,
     fontWeight: '800'
+  },
+  scanQrBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 8,
+    paddingLeft: 10,
+    borderLeftWidth: 1,
+    borderLeftColor: HeronColors.borderLight
+  },
+  scanQrIcon: {
+    fontSize: 14
+  },
+  scanQrText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: HeronColors.brand,
+    letterSpacing: 0.5
   },
   categoryScroll: {
     paddingHorizontal: Spacing.lg,
