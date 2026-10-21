@@ -11,6 +11,7 @@ import { MyRecipesView } from '../components/MyRecipesView';
 import { SettingsModal } from '../components/SettingsModal';
 import { OnboardingModal } from '../components/OnboardingModal';
 import { ShoppingListModal } from '../components/ShoppingListModal';
+import { PantryFinderModal } from '../components/PantryFinderModal';
 import { FloatingTimerWidget } from '../components/ui/FloatingTimerWidget';
 const CATEGORIES = ['Tất cả', 'Món nhanh ⚡', 'Món chính 🍲', 'Ăn kiêng 🥗', 'Tráng miệng 🍰', 'Thức uống 🍹'];
 export default function AppMainScreen() {
@@ -39,6 +40,7 @@ export default function AppMainScreen() {
   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
   const [isOnboardingVisible, setIsOnboardingVisible] = useState(false);
   const [isShoppingListVisible, setIsShoppingListVisible] = useState(false);
+  const [isPantryVisible, setIsPantryVisible] = useState(false);
 
   // Filtered recipes
   const filteredRecipes = useMemo(() => {
@@ -68,15 +70,19 @@ export default function AppMainScreen() {
           </View>
 
           <View style={styles.headerRightActions}>
-            {/* Guide Button */}
-            <Pressable onPress={() => setIsOnboardingVisible(true)} style={({
+            {/* Pantry Finder Button */}
+            <Pressable accessibilityRole="button" accessibilityLabel="Mở tủ lạnh nhà tôi" hitSlop={4} onPress={() => setIsPantryVisible(true)} style={({
             pressed
           }) => [styles.headerActionBtn, {
             transform: [{
               scale: pressed ? 0.94 : 1
             }]
           }]}>
-              <Text style={styles.headerActionIcon}>💡</Text>
+              <View style={styles.fridgeIcon}>
+                <View style={styles.fridgeDivider} />
+                <View style={styles.fridgeHandleTop} />
+                <View style={styles.fridgeHandleBottom} />
+              </View>
             </Pressable>
 
             {/* Shopping List Button */}
@@ -319,6 +325,15 @@ export default function AppMainScreen() {
         <OnboardingModal visible={!hasSeenOnboarding || isOnboardingVisible} onClose={() => setIsOnboardingVisible(false)} />
 
         <ShoppingListModal visible={isShoppingListVisible} onClose={() => setIsShoppingListVisible(false)} />
+
+        <PantryFinderModal
+          visible={isPantryVisible}
+          onClose={() => setIsPantryVisible(false)}
+          onSelectRecipe={recipe => {
+            setIsPantryVisible(false);
+            setSelectedRecipeForDetail(recipe);
+          }}
+        />
       </View>
     </SafeAreaView>;
 }
@@ -392,6 +407,38 @@ const styles = StyleSheet.create({
   headerActionIcon: {
     fontSize: 18,
     color: HeronColors.primary
+  },
+  fridgeIcon: {
+    width: 16,
+    height: 21,
+    borderWidth: 1.5,
+    borderColor: HeronColors.primary,
+    borderRadius: 3,
+    position: 'relative'
+  },
+  fridgeDivider: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 7,
+    height: 1,
+    backgroundColor: HeronColors.primary
+  },
+  fridgeHandleTop: {
+    position: 'absolute',
+    right: 2,
+    top: 3,
+    width: 1.5,
+    height: 3,
+    backgroundColor: HeronColors.primary
+  },
+  fridgeHandleBottom: {
+    position: 'absolute',
+    right: 2,
+    top: 11,
+    width: 1.5,
+    height: 4,
+    backgroundColor: HeronColors.primary
   },
   badgeCounter: {
     position: 'absolute',
