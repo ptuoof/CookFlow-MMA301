@@ -4,6 +4,7 @@ import { INITIAL_RECIPES } from '../data/mockRecipes';
 const STORAGE_KEY_RECIPES = '@cookflow_recipes_v2';
 const STORAGE_KEY_FAVS = '@cookflow_favs_v2';
 const STORAGE_KEY_SHOPPING = '@cookflow_shopping_v2';
+const STORAGE_KEY_PANTRY = '@cookflow_pantry_v1';
 const STORAGE_KEY_ONBOARDING = '@cookflow_onboarding_v2';
 const RecipeContext = createContext(undefined);
 
@@ -54,6 +55,7 @@ export const RecipeProvider = ({
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
   const [searchQuery, setSearchQuery] = useState('');
   const [activeRecipeForCooking, setActiveRecipeForCooking] = useState(null);
+  const [pantryIngredients, setPantryIngredients] = useState([]);
 
   // Shopping list state
   const [shoppingList, setShoppingList] = useState([{
@@ -90,6 +92,7 @@ export const RecipeProvider = ({
       const storedRecipes = await safeStorage.getItem(STORAGE_KEY_RECIPES);
       const storedFavs = await safeStorage.getItem(STORAGE_KEY_FAVS);
       const storedShopping = await safeStorage.getItem(STORAGE_KEY_SHOPPING);
+      const storedPantry = await safeStorage.getItem(STORAGE_KEY_PANTRY);
       const storedOnboarding = await safeStorage.getItem(STORAGE_KEY_ONBOARDING);
       if (storedRecipes) {
         const parsed = JSON.parse(storedRecipes);
@@ -109,6 +112,12 @@ export const RecipeProvider = ({
         const parsedShopping = JSON.parse(storedShopping);
         if (Array.isArray(parsedShopping)) {
           setShoppingList(parsedShopping);
+        }
+      }
+      if (storedPantry) {
+        const parsedPantry = JSON.parse(storedPantry);
+        if (Array.isArray(parsedPantry)) {
+          setPantryIngredients(parsedPantry.filter(item => typeof item === 'string'));
         }
       }
       if (storedOnboarding === 'true') {
@@ -155,6 +164,18 @@ export const RecipeProvider = ({
   };
   const isFavorite = id => favoriteIds.includes(id);
   const getRecipeById = id => recipes.find(r => r.id === id);
+
+  const togglePantryIngredient = ingredientName => {
+    const updated = pantryIngredients.includes(ingredientName)
+      ? pantryIngredients.filter(name => name !== ingredientName)
+      : [...pantryIngredients, ingredientName];
+    setPantryIngredients(updated);
+    safeStorage.setItem(STORAGE_KEY_PANTRY, JSON.stringify(updated));
+  };
+  const clearPantry = () => {
+    setPantryIngredients([]);
+    safeStorage.setItem(STORAGE_KEY_PANTRY, JSON.stringify([]));
+  };
 
   // Shopping List methods
   const addToShoppingList = (ingredients, recipeTitle) => {
@@ -229,6 +250,9 @@ export const RecipeProvider = ({
     toggleFavorite,
     isFavorite,
     getRecipeById,
+    pantryIngredients,
+    togglePantryIngredient,
+    clearPantry,
     shoppingList,
     addToShoppingList,
     toggleShoppingItem,
