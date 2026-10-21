@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Alert } from 'react-native';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
+import { groupShoppingItemsByAisle } from '../utils/groceryAisles';
 export const ShoppingListModal = ({
   visible,
   onClose
@@ -18,6 +19,7 @@ export const ShoppingListModal = ({
   const [newUnit, setNewUnit] = useState('');
   const completedCount = shoppingList.filter(item => item.checked).length;
   const totalCount = shoppingList.length;
+  const aisleGroups = groupShoppingItemsByAisle(shoppingList);
   const handleAddItem = () => {
     if (!newName.trim()) {
       Alert.alert('Lỗi', 'Vui lòng nhập tên nguyên liệu');
@@ -92,7 +94,12 @@ export const ShoppingListModal = ({
                 Bấm nút "Thêm vào Danh sách đi chợ" từ chi tiết bất kỳ món ăn nào!
               </Text>
             </View> : <View style={styles.itemsList}>
-              {shoppingList.map(item => <Pressable key={item.id} onPress={() => toggleShoppingItem(item.id)} style={[styles.itemCard, item.checked && styles.itemCardChecked]}>
+              {aisleGroups.map(group => <View key={group.id} style={styles.aisleGroup}>
+                <View style={styles.aisleHeading}>
+                  <Text style={styles.aisleTitle}>{group.label}</Text>
+                  <Text style={styles.aisleCount}>{group.items.length}</Text>
+                </View>
+                {group.items.map(item => <Pressable key={item.id} accessibilityRole="checkbox" accessibilityState={{ checked: item.checked }} onPress={() => toggleShoppingItem(item.id)} style={[styles.itemCard, item.checked && styles.itemCardChecked]}>
                   <View style={styles.checkbox}>
                     <Text style={styles.checkIcon}>{item.checked ? '✓' : ''}</Text>
                   </View>
@@ -106,13 +113,14 @@ export const ShoppingListModal = ({
                     </Text>
                   </View>
 
-                  <Pressable onPress={e => {
+                  <Pressable accessibilityRole="button" accessibilityLabel={`Xóa ${item.name}`} onPress={e => {
               e.stopPropagation();
               deleteShoppingItem(item.id);
             }} style={styles.deleteBtn}>
                     <Text style={styles.deleteText}>✕</Text>
                   </Pressable>
                 </Pressable>)}
+              </View>)}
             </View>}
 
           {/* Action Row */}
@@ -260,6 +268,28 @@ const styles = StyleSheet.create({
   },
   itemsList: {
     gap: 10
+  },
+  aisleGroup: {
+    gap: 8
+  },
+  aisleHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 3,
+    paddingTop: 8
+  },
+  aisleTitle: {
+    color: HeronColors.inkPrimary,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase'
+  },
+  aisleCount: {
+    color: HeronColors.granite,
+    fontSize: 11,
+    fontWeight: '700'
   },
   itemCard: {
     flexDirection: 'row',
