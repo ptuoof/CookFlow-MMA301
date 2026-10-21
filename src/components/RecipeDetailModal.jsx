@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, View, Text, StyleSheet, ScrollView, Image, Pressable, Alert } from 'react-native';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { AppleBadge } from './ui/AppleBadge';
@@ -22,9 +22,13 @@ export const RecipeDetailModal = ({
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
   const [aiQuestion, setAiQuestion] = useState(null);
   const [isShareVisible, setIsShareVisible] = useState(false);
-  if (!recipeProp) return null;
   // Read the live copy so edits made while open (e.g. AI substitutions) show immediately
-  const recipe = getRecipeById(recipeProp.id) || recipeProp;
+  const recipe = recipeProp ? getRecipeById(recipeProp.id) || recipeProp : null;
+  const [currentServings, setCurrentServings] = useState(recipe?.servings ?? 1);
+  useEffect(() => {
+    if (recipe) setCurrentServings(recipe.servings);
+  }, [recipe?.id, recipe?.servings]);
+  if (!recipe) return null;
   const isFav = isFavorite(recipe.id);
   const toggleCheck = id => {
     setCheckedIngredients(prev => ({
@@ -113,7 +117,11 @@ export const RecipeDetailModal = ({
 
             <View style={[styles.statCell, styles.statCellBorder]}>
               <Text style={styles.statKey}>KHẨU PHẦN</Text>
-              <Text style={styles.statVal}>{recipe.servings} người</Text>
+              <View style={styles.portionControls}>
+                <Pressable accessibilityLabel="Giảm khẩu phần" onPress={() => setCurrentServings(value => Math.max(1, value - 1))} style={styles.portionButton}><Text style={styles.portionButtonText}>−</Text></Pressable>
+                <Text style={styles.statVal}>{currentServings} người</Text>
+                <Pressable accessibilityLabel="Tăng khẩu phần" onPress={() => setCurrentServings(value => value + 1)} style={styles.portionButton}><Text style={styles.portionButtonText}>+</Text></Pressable>
+              </View>
             </View>
 
             <View style={[styles.statCell, styles.statCellBorder]}>
@@ -151,7 +159,7 @@ export const RecipeDetailModal = ({
                     </Text>
                     <View style={styles.amountBadge}>
                       <Text style={[styles.ingredientAmount, isChecked && styles.ingredientAmountChecked]}>
-                        {item.amount} {item.unit}
+                        {scaleAmount(item.amount, currentServings / Math.max(1, recipe.servings))} {item.unit}
                       </Text>
                     </View>
                   </Pressable>;
@@ -160,7 +168,10 @@ export const RecipeDetailModal = ({
 
             {/* Quick Add to Shopping List Button */}
             <Pressable onPress={() => {
-            addToShoppingList(recipe.ingredients, recipe.title);
+            addToShoppingList(recipe.ingredients.map(item => ({
+              ...item,
+              amount: scaleAmount(item.amount, currentServings / Math.max(1, recipe.servings))
+            })), recipe.title);
             Alert.alert('Thành công! 🛒', `Đã thêm ${recipe.ingredients.length} nguyên liệu của món "${recipe.title}" vào Danh sách đi chợ của bạn.`);
           }} style={({
             pressed
@@ -262,6 +273,16 @@ export const RecipeDetailModal = ({
         <ShareRecipeModal key={recipe.id} visible={isShareVisible} onClose={() => setIsShareVisible(false)} recipe={recipe} />
       </View>
     </Modal>;
+};
+const scaleAmount = (amount, ratio) => {
+  const match = amount.match(/^\s*(\d+(?:\.\d+)?|\d+\/\d+)(.*)$/);
+  if (!match) return amount;
+  const value = match[1].includes('/')
+    ? Number(match[1].split('/')[0]) / Number(match[1].split('/')[1])
+    : Number(match[1]);
+  if (!Number.isFinite(value)) return amount;
+  const scaled = Math.round(value * ratio * 10) / 10;
+  return `${Number.isInteger(scaled) ? scaled : scaled.toFixed(1)}${match[2]}`;
 };
 const styles = StyleSheet.create({
   container: {
@@ -407,6 +428,9 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: HeronColors.primary
   },
+  portionControls: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  portionButton: { width: 24, height: 24, borderRadius: 12, backgroundColor: HeronColors.cardAlt, alignItems: 'center', justifyContent: 'center' },
+  portionButtonText: { color: HeronColors.primary, fontSize: 16, fontWeight: '800' },
   sectionWrap: {
     marginBottom: Spacing.xl
   },

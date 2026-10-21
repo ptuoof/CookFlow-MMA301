@@ -48,6 +48,7 @@ export const safeStorage = {
 export const RecipeProvider = ({
   children
 }) => {
+  const [cookingTimer, setCookingTimer] = useState(null);
   const [recipes, setRecipes] = useState(INITIAL_RECIPES);
   const [favoriteIds, setFavoriteIds] = useState(['rec_01', 'rec_03']);
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
@@ -76,6 +77,14 @@ export const RecipeProvider = ({
   useEffect(() => {
     loadPersistedData();
   }, []);
+
+  useEffect(() => {
+    if (!cookingTimer?.running) return;
+    const interval = setInterval(() => setCookingTimer(timer => timer && timer.running
+      ? { ...timer, secondsLeft: Math.max(0, timer.secondsLeft - 1), running: timer.secondsLeft > 1 }
+      : timer), 1000);
+    return () => clearInterval(interval);
+  }, [cookingTimer?.running]);
   const loadPersistedData = async () => {
     try {
       const storedRecipes = await safeStorage.getItem(STORAGE_KEY_RECIPES);
@@ -204,6 +213,8 @@ export const RecipeProvider = ({
     safeStorage.removeItem(STORAGE_KEY_ONBOARDING);
   };
   return <RecipeContext.Provider value={{
+    cookingTimer,
+    setCookingTimer,
     recipes,
     favoriteIds,
     selectedCategory,
