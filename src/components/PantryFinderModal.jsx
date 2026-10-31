@@ -1,17 +1,30 @@
 import React, { useMemo, useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Alert } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Switch } from 'react-native';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
+import { containsPhrase, normalizeVi as normalize } from '../utils/text';
+import { showAlert } from '../utils/dialog';
 
-const normalize = value => (value || '')
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .toLowerCase()
-  .trim();
+// Basic seasonings most kitchens always have; optionally not counted as "missing".
+const STAPLES = ['muoi', 'duong', 'tieu', 'nuoc loc', 'dau an', 'hat nem', 'bot ngot', 'nuoc da'];
+export const isStapleIngredient = name => {
+  const key = normalize(name);
+  return STAPLES.some(staple => key === staple || key.startsWith(`${staple} `) || key.startsWith(`${staple},`));
+};
+
+// "Thịt bò" in the pantry covers "Thịt bò phi lê"; exact names always match.
+const isAvailable = (ingredientName, pantryKeys) => {
+  const key = normalize(ingredientName);
+  return pantryKeys.some(p => p === key || containsPhrase(key, p));
+};
 
 export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
   const { recipes, pantryIngredients, togglePantryIngredient, clearPantry, addToShoppingList } = useRecipes();
   const [query, setQuery] = useState('');
+  const [assumeStaples, setAssumeStaples] = useState(true);
+  const pantryKeys = useMemo(() => pantryIngredients.map(normalize).filter(Boolean), [pantryIngredients]);
+  const trimmedQuery = query.trim();
+  const canAddCustom = trimmedQuery.length > 1 && !pantryKeys.includes(normalize(trimmedQuery));
 
   const ingredientCatalog = useMemo(() => {
     const unique = new Map();
@@ -28,29 +41,36 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
   }, [ingredientCatalog, query]);
 
   const matches = useMemo(() => {
-    if (pantryIngredients.length === 0) return [];
-    const available = new Set(pantryIngredients.map(normalize));
+    if (pantryKeys.length === 0) return [];
     return recipes.map(recipe => {
       const ingredients = recipe.ingredients || [];
-      const availableIngredients = ingredients.filter(item => available.has(normalize(item.name)));
-      const missingIngredients = ingredients.filter(item => !available.has(normalize(item.name)));
-      return { recipe, availableIngredients, missingIngredients };
+      const availableIngredients = ingredients.filter(item => isAvailable(item.name, pantryKeys));
+      const missingIngredients = ingredients.filter(item => !isAvailable(item.name, pantryKeys) && !(assumeStaples && isStapleIngredient(item.name)));
+      const counted = availableIngredients.length + missingIngredients.length;
+      return { recipe, availableIngredients, missingIngredients, counted };
     })
       .filter(result => result.availableIngredients.length > 0)
       .sort((a, b) => {
         const aComplete = a.missingIngredients.length === 0 ? 1 : 0;
         const bComplete = b.missingIngredients.length === 0 ? 1 : 0;
         return bComplete - aComplete
-          || b.availableIngredients.length / b.recipe.ingredients.length - a.availableIngredients.length / a.recipe.ingredients.length
-          || b.availableIngredients.length - a.availableIngredients.length;
+          || a.missingIngredients.length - b.missingIngredients.length
+          || b.availableIngredients.length / Math.max(1, b.counted) - a.availableIngredients.length / Math.max(1, a.counted);
       });
-  }, [recipes, pantryIngredients]);
+  }, [recipes, pantryKeys, assumeStaples]);
 
   const handleAddMissing = result => {
     if (!result.missingIngredients.length) return;
-    addToShoppingList(result.missingIngredients, result.recipe.title);
-    Alert.alert('Đã thêm vào giỏ', `Đã thêm ${result.missingIngredients.length} nguyên liệu còn thiếu cho món ${result.recipe.title}.`);
+    const { added, merged } = addToShoppingList(result.missingIngredients, result.recipe.title);
+    showAlert('Đã cập nhật giỏ đi chợ', `Món ${result.recipe.title}: thêm mới ${added}${merged ? `, cộng dồn ${merged}` : ''} nguyên liệu còn thiếu.`);
   };
+  const handleAddCustom = () => {
+    if (!canAddCustom) return;
+    togglePantryIngredient(trimmedQuery);
+    setQuery('');
+  };
+  // Custom items typed by the user also appear as removable chips
+  const customSelected = pantryIngredients.filter(name => !ingredientCatalog.some(item => normalize(item) === normalize(name)));
 
   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
     <View style={styles.container}>
@@ -75,6 +95,8 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
           placeholderTextColor={HeronColors.surface}
           value={query}
           onChangeText={setQuery}
+          returnKeyType="done"
+          onSubmitEditing={handleAddCustom}
         />
         {query ? <Pressable accessibilityRole="button" accessibilityLabel="Xóa tìm kiếm" hitSlop={4} onPress={() => setQuery('')} style={({ pressed }) => [styles.clearSearch, pressed && styles.pressed]}>
           <Text style={styles.clearSearchText}>×</Text>
@@ -91,9 +113,17 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
         </Pressable> : null}
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.ingredientList}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.ingredientList}>
+        {canAddCustom ? <Pressable accessibilityRole="button" onPress={handleAddCustom} style={({ pressed }) => [styles.ingredientChip, styles.ingredientChipSelected, pressed && styles.pressed]}>
+          <Text style={[styles.chipCheck, styles.chipCheckSelected]}>+</Text>
+          <Text style={[styles.ingredientChipText, styles.ingredientChipTextSelected]}>Thêm “{trimmedQuery}”</Text>
+        </Pressable> : null}
+        {customSelected.map(name => <Pressable key={`custom_${normalize(name)}`} accessibilityRole="checkbox" accessibilityState={{ checked: true }} onPress={() => togglePantryIngredient(name)} style={({ pressed }) => [styles.ingredientChip, styles.ingredientChipSelected, pressed && styles.pressed]}>
+          <Text style={[styles.chipCheck, styles.chipCheckSelected]}>✓</Text>
+          <Text style={[styles.ingredientChipText, styles.ingredientChipTextSelected]}>{name}</Text>
+        </Pressable>)}
         {visibleIngredients.map(name => {
-          const selected = pantryIngredients.includes(name);
+          const selected = pantryKeys.includes(normalize(name));
           return <Pressable
             key={normalize(name)}
             accessibilityRole="checkbox"
@@ -105,8 +135,13 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
             <Text style={[styles.ingredientChipText, selected && styles.ingredientChipTextSelected]}>{name}</Text>
           </Pressable>;
         })}
-        {visibleIngredients.length === 0 ? <Text style={styles.noIngredients}>Không tìm thấy nguyên liệu phù hợp.</Text> : null}
+        {visibleIngredients.length === 0 && !canAddCustom ? <Text style={styles.noIngredients}>Không tìm thấy nguyên liệu phù hợp.</Text> : null}
       </ScrollView>
+
+      <View style={styles.staplesRow}>
+        <Text style={styles.staplesText}>Coi muối, đường, tiêu, dầu ăn… là có sẵn</Text>
+        <Switch value={assumeStaples} onValueChange={setAssumeStaples} trackColor={{ false: HeronColors.border, true: HeronColors.brand }} />
+      </View>
 
       <View style={styles.resultsHeading}>
         <View style={styles.resultsTitleRow}>
@@ -132,7 +167,7 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
               <View style={styles.recipeCopy}>
                 <Text style={styles.recipeTitle} numberOfLines={2}>{result.recipe.title}</Text>
                 <Text style={styles.recipeMeta}>
-                  {result.availableIngredients.length}/{result.recipe.ingredients.length} nguyên liệu có sẵn
+                  {result.availableIngredients.length}/{result.counted} nguyên liệu có sẵn
                   {complete ? ' · Đủ để nấu' : ` · Thiếu ${result.missingIngredients.length}`}
                 </Text>
               </View>
@@ -150,6 +185,8 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
 };
 
 const styles = StyleSheet.create({
+  staplesRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginHorizontal: Spacing.lg, marginTop: 14 },
+  staplesText: { flex: 1, color: HeronColors.granite, fontSize: 12 },
   container: { flex: 1, backgroundColor: HeronColors.canvas },
   dragHandleWrap: { alignItems: 'center', paddingVertical: 10 },
   dragHandle: { width: 44, height: 5, borderRadius: 3, backgroundColor: '#D1D5DB' },

@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Share, Alert, Platform } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Share, Platform } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
@@ -7,6 +7,9 @@ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { AppleButton } from './ui/AppleButton';
 import { RecipeStoryCard } from './ui/RecipeStoryCard';
 import { encodeRecipeForQr } from '../services/recipeQr';
+import { showAlert } from '../utils/dialog';
+// QR version 40 at ECC level L holds 2953 bytes; larger payloads make the QR library throw
+const QR_HARD_LIMIT_BYTES = 2900;
 const STORY_EXPORT = {
   width: 1080,
   height: 1920
@@ -47,7 +50,7 @@ export const ShareRecipeModal = ({
         ...STORY_EXPORT
       });
       if (!(await Sharing.isAvailableAsync())) {
-        Alert.alert('Không hỗ trợ chia sẻ', 'Thiết bị này chưa hỗ trợ hộp thoại chia sẻ file.');
+        showAlert('Không hỗ trợ chia sẻ', 'Thiết bị này chưa hỗ trợ hộp thoại chia sẻ file.');
         return;
       }
       await Sharing.shareAsync(uri, {
@@ -57,7 +60,7 @@ export const ShareRecipeModal = ({
       });
     } catch (e) {
       console.log('Story export error', e);
-      Alert.alert('Xuất ảnh thất bại', 'Không thể tạo ảnh thẻ công thức. Vui lòng thử lại.');
+      showAlert('Xuất ảnh thất bại', 'Không thể tạo ảnh thẻ công thức. Vui lòng thử lại.');
     } finally {
       setIsExporting(false);
     }
@@ -134,7 +137,9 @@ export const ShareRecipeModal = ({
                   {recipe.title}
                 </Text>
                 <View style={styles.qrFrame}>
-                  <QRCode value={qr.payload} size={260} ecl="L" quietZone={8} color={HeronColors.primary} backgroundColor="#FFFFFF" />
+                  {qr.bytes <= QR_HARD_LIMIT_BYTES ? <QRCode value={qr.payload} size={260} ecl="L" quietZone={8} color={HeronColors.primary} backgroundColor="#FFFFFF" /> : <Text style={styles.noticeText}>
+                      Công thức quá dài để tạo mã QR. Hãy dùng nút “Gửi mã dạng văn bản” bên dưới — người nhận dán mã vào mục Quét QR.
+                    </Text>}
                 </View>
                 <Text style={styles.qrMeta}>
                   {recipe.ingredients.length} NGUYÊN LIỆU • {recipe.steps.length} BƯỚC • {(qr.bytes / 1024).toFixed(1)} KB
@@ -143,7 +148,7 @@ export const ShareRecipeModal = ({
 
               {qr.truncated ? <View style={styles.noticeBox}>
                   <Text style={styles.noticeText}>
-                    ✂ Công thức khá dài nên mã QR đã rút gọn bớt mẹo / mô tả chi tiết để điện thoại quét được dễ dàng.
+                    {qr.tooLarge ? '⚠ Mã QR rất dày, một số điện thoại có thể khó quét. ' : ''}✂ Mã QR đã rút gọn bớt video / mẹo / mô tả chi tiết để điện thoại quét được dễ dàng. Ảnh hoặc video chọn từ máy không được gửi kèm.
                   </Text>
                 </View> : null}
 

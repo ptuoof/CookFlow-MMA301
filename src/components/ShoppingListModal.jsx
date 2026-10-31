@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Alert } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Share, Platform } from 'react-native';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
 import { groupShoppingItemsByAisle } from '../utils/groceryAisles';
+import { confirmAction, showAlert } from '../utils/dialog';
 export const ShoppingListModal = ({
   visible,
   onClose
@@ -19,25 +20,65 @@ export const ShoppingListModal = ({
   const [newUnit, setNewUnit] = useState('');
   const completedCount = shoppingList.filter(item => item.checked).length;
   const totalCount = shoppingList.length;
-  const aisleGroups = groupShoppingItemsByAisle(shoppingList);
+  // Items still to buy stay on top of each aisle; bought ones sink to the bottom
+  const aisleGroups = groupShoppingItemsByAisle(shoppingList).map(group => ({
+    ...group,
+    remaining: group.items.filter(item => !item.checked).length,
+    items: [...group.items].sort((a, b) => Number(a.checked) - Number(b.checked))
+  }));
   const handleAddItem = () => {
     if (!newName.trim()) {
-      Alert.alert('Lỗi', 'Vui lòng nhập tên nguyên liệu');
+      showAlert('Thiếu tên nguyên liệu', 'Vui lòng nhập tên nguyên liệu cần mua.');
       return;
     }
-    addCustomShoppingItem(newName, newAmount, newUnit);
+    if (newAmount.trim() && !/^\d+([.,]\d+)?(\/\d+)?$/.test(newAmount.trim())) {
+      showAlert('Số lượng chưa hợp lệ', 'Nhập số lượng dạng số, ví dụ 2, 0,5 hoặc 1/2 — hoặc để trống.');
+      return;
+    }
+    const { merged } = addCustomShoppingItem(newName, newAmount, newUnit);
+    if (merged) showAlert('Đã cộng dồn', `"${newName.trim()}" đã có trong danh sách nên số lượng được cộng thêm.`);
     setNewName('');
     setNewAmount('');
     setNewUnit('');
   };
-  const handleShareList = () => {
+  const buildShareText = () => {
+    const lines = ['🛒 DANH SÁCH ĐI CHỢ — CookFlow', ''];
+    aisleGroups.forEach(group => {
+      lines.push(`【${group.label}】`);
+      group.items.forEach(i => lines.push(`${i.checked ? '☑' : '☐'} ${i.name} — ${i.amount} ${i.unit}`.trim()));
+      lines.push('');
+    });
+    lines.push(`Còn cần mua: ${totalCount - completedCount}/${totalCount}`);
+    return lines.join('\n');
+  };
+  const handleShareList = async () => {
     if (shoppingList.length === 0) {
-      Alert.alert('Thông báo', 'Danh sách đi chợ đang trống!');
+      showAlert('Thông báo', 'Danh sách đi chợ đang trống!');
       return;
     }
-    const textList = shoppingList.map(i => `${i.checked ? '[x]' : '[ ]'} ${i.name} (${i.amount} ${i.unit}) - ${i.recipeTitle}`).join('\n');
-    Alert.alert('📋 Danh Sách Đi Chợ CookFlow', textList);
+    const message = buildShareText();
+    try {
+      if (Platform.OS === 'web') {
+        const nav = globalThis.navigator;
+        if (nav?.share) await nav.share({ title: 'Danh sách đi chợ', text: message });
+        else if (nav?.clipboard) {
+          await nav.clipboard.writeText(message);
+          showAlert('Đã sao chép', 'Danh sách đã được sao chép, bạn có thể dán vào tin nhắn.');
+        }
+        return;
+      }
+      await Share.share({ message, title: 'Danh sách đi chợ CookFlow' });
+    } catch {
+      // user dismissed the share sheet
+    }
   };
+  const handleClearChecked = () => confirmAction({
+    title: 'Xóa các món đã mua?',
+    message: `${completedCount} mục đã đánh dấu sẽ bị xóa khỏi danh sách.`,
+    confirmText: 'Xóa',
+    destructive: true,
+    onConfirm: clearCheckedShoppingItems
+  });
   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={styles.container}>
         {/* iOS Drag Handle */}
@@ -72,21 +113,21 @@ export const ShoppingListModal = ({
           <View style={styles.addInputRow}>
             <TextInput style={[styles.input, {
             flex: 2
-          }]} placeholder="Tên nguyên liệu..." placeholderTextColor={HeronColors.disable} value={newName} onChangeText={setNewName} />
+          }]} placeholder="Tên nguyên liệu..." placeholderTextColor={HeronColors.disable} value={newName} onChangeText={setNewName} returnKeyType="next" maxLength={80} />
             <TextInput style={[styles.input, {
             flex: 1
-          }]} placeholder="Số lượng" placeholderTextColor={HeronColors.disable} value={newAmount} onChangeText={setNewAmount} />
+          }]} placeholder="SL" placeholderTextColor={HeronColors.disable} value={newAmount} onChangeText={setNewAmount} keyboardType="decimal-pad" maxLength={8} />
             <TextInput style={[styles.input, {
             flex: 1
-          }]} placeholder="Đơn vị" placeholderTextColor={HeronColors.disable} value={newUnit} onChangeText={setNewUnit} />
-            <Pressable onPress={handleAddItem} style={styles.addBtn}>
+          }]} placeholder="Đơn vị" placeholderTextColor={HeronColors.disable} value={newUnit} onChangeText={setNewUnit} returnKeyType="done" onSubmitEditing={handleAddItem} maxLength={20} />
+            <Pressable accessibilityRole="button" accessibilityLabel="Thêm vào danh sách" onPress={handleAddItem} style={styles.addBtn}>
               <Text style={styles.addBtnText}>+</Text>
             </Pressable>
           </View>
         </View>
 
         {/* Main List */}
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scrollContent}>
           {shoppingList.length === 0 ? <View style={styles.emptyWrap}>
               <Text style={styles.emptyIcon}>🧺</Text>
               <Text style={styles.emptyTitle}>Chưa có nguyên liệu nào</Text>
@@ -97,7 +138,7 @@ export const ShoppingListModal = ({
               {aisleGroups.map(group => <View key={group.id} style={styles.aisleGroup}>
                 <View style={styles.aisleHeading}>
                   <Text style={styles.aisleTitle}>{group.label}</Text>
-                  <Text style={styles.aisleCount}>{group.items.length}</Text>
+                  <Text style={styles.aisleCount}>{group.remaining}/{group.items.length}</Text>
                 </View>
                 {group.items.map(item => <Pressable key={item.id} accessibilityRole="checkbox" accessibilityState={{ checked: item.checked }} onPress={() => toggleShoppingItem(item.id)} style={[styles.itemCard, item.checked && styles.itemCardChecked]}>
                   <View style={styles.checkbox}>
@@ -129,7 +170,7 @@ export const ShoppingListModal = ({
                 <Text style={styles.shareBtnText}>📋 Xuất / Gửi danh sách</Text>
               </Pressable>
 
-              {completedCount > 0 ? <Pressable onPress={clearCheckedShoppingItems} style={styles.clearBtn}>
+              {completedCount > 0 ? <Pressable onPress={handleClearChecked} style={styles.clearBtn}>
                   <Text style={styles.clearBtnText}>🧹 Xóa món đã mua</Text>
                 </Pressable> : null}
             </View> : null}

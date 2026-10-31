@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Linking, Alert } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Linking } from 'react-native';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { AppleButton } from './ui/AppleButton';
 import { askSousChef, extractIngredientChanges, getGeminiApiKey, saveGeminiApiKey, clearGeminiApiKey, GEMINI_KEY_URL } from '../services/gemini';
 import { buildPersonalVariant, shoppingItemsForChanges } from '../services/recipeVariant';
 import { useRecipes } from '../context/RecipeContext';
+import { showAlert } from '../utils/dialog';
 export const SOUS_CHEF_SUGGESTIONS = [{
   icon: '💡',
   label: 'Thay thế gia vị',
@@ -199,7 +200,7 @@ export const AiChefChatModal = ({
   const handleAddToCart = () => {
     const items = shoppingItemsForChanges(selectedChanges);
     if (items.length === 0) {
-      Alert.alert('Không có gì để mua', 'Các thay đổi đã chọn chỉ bỏ bớt nguyên liệu.');
+      showAlert('Không có gì để mua', 'Các thay đổi đã chọn chỉ bỏ bớt nguyên liệu.');
       return;
     }
     addToShoppingList(items, `${recipe.title} • thay thế AI`);
@@ -213,7 +214,7 @@ export const AiChefChatModal = ({
     const targetIds = new Set(target.ingredients.map(i => i.id));
     const applicable = selectedChanges.filter(c => targetIds.has(c.replacesId));
     if (applicable.length === 0) {
-      Alert.alert('Đã áp dụng trước đó', `Các nguyên liệu này đã được thay trong "${target.title}".`);
+      showAlert('Đã áp dụng trước đó', `Các nguyên liệu này đã được thay trong "${target.title}".`);
       return;
     }
     const result = buildPersonalVariant(target, applicable);

@@ -1,14 +1,20 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Switch } from 'react-native';
 import { AppleColors, Radius, AppleShadow, Spacing } from '../constants/theme';
+import { useRecipes } from '../context/RecipeContext';
 export const SettingsModal = ({
   visible,
   onClose,
   onReopenOnboarding
 }) => {
-  const [keepAwake, setKeepAwake] = useState(true);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [vibrationEnabled, setVibrationEnabled] = useState(true);
+  // Persisted in RecipeContext and actually used by Cooking Mode / the timer
+  const { settings, updateSettings } = useRecipes();
+  const keepAwake = settings.keepAwake;
+  const soundEnabled = settings.timerSound;
+  const vibrationEnabled = settings.vibration;
+  const setKeepAwake = value => updateSettings({ keepAwake: value });
+  const setSoundEnabled = value => updateSettings({ timerSound: value });
+  const setVibrationEnabled = value => updateSettings({ vibration: value });
   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={styles.container}>
         {/* iOS Drag Handle */}
@@ -58,7 +64,7 @@ export const SettingsModal = ({
                 <Text style={styles.rowIcon}>🔔</Text>
                 <View>
                   <Text style={styles.rowTitle}>Chuông báo Timer</Text>
-                  <Text style={styles.rowDesc}>Phát chuông khi đếm ngược hoàn tất</Text>
+                  <Text style={styles.rowDesc}>Đọc thông báo bằng giọng nói khi hết giờ</Text>
                 </View>
               </View>
               <Switch value={soundEnabled} onValueChange={setSoundEnabled} trackColor={{
@@ -72,7 +78,7 @@ export const SettingsModal = ({
                 <Text style={styles.rowIcon}>📳</Text>
                 <View>
                   <Text style={styles.rowTitle}>Rung phản hồi (Haptics)</Text>
-                  <Text style={styles.rowDesc}>Rung nhẹ khi chạm nút và hết giờ</Text>
+                  <Text style={styles.rowDesc}>Rung khi timer hết giờ (Android/iOS)</Text>
                 </View>
               </View>
               <Switch value={vibrationEnabled} onValueChange={setVibrationEnabled} trackColor={{
