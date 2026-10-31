@@ -1,0 +1,2685 @@
+diff --git a/package-lock.json b/package-lock.json
+index 04a9cd3..50c89b4 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -18,6 +18,7 @@
+         "expo-glass-effect": "~57.0.3",
+         "expo-image": "~57.0.5",
+         "expo-image-picker": "~57.0.20",
++        "expo-keep-awake": "~57.0.2",
+         "expo-linking": "~57.0.10",
+         "expo-router": "~57.0.22",
+         "expo-sharing": "~57.0.23",
+diff --git a/package.json b/package.json
+index 61f9b6c..9461e55 100644
+--- a/package.json
++++ b/package.json
+@@ -13,6 +13,7 @@
+     "expo-glass-effect": "~57.0.3",
+     "expo-image": "~57.0.5",
+     "expo-image-picker": "~57.0.20",
++    "expo-keep-awake": "~57.0.2",
+     "expo-linking": "~57.0.10",
+     "expo-router": "~57.0.22",
+     "expo-sharing": "~57.0.23",
+@@ -46,7 +47,8 @@
+     "android": "expo start --android",
+     "ios": "expo start --ios",
+     "web": "expo start --web",
+-    "lint": "expo lint"
++    "lint": "expo lint",
++    "test:logic": "node --import ./scripts/test-loader.mjs --test scripts/logic.test.mjs"
+   },
+   "private": true
+ }
+diff --git a/scripts/logic.test.mjs b/scripts/logic.test.mjs
+new file mode 100644
+index 0000000..595e2b6
+--- /dev/null
++++ b/scripts/logic.test.mjs
+@@ -0,0 +1,74 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++// Business-rule tests for the pure helpers (no React Native runtime needed).
++const R = new URL('../src', import.meta.url).href;
++const { scaleAmount, addAmounts, parseAmount, parseIntInRange } = await import(`${R}/utils/quantity.js`);
++const { normalizeVi, matchesSearch, containsPhrase } = await import(`${R}/utils/text.js`);
++const { getGroceryAisle } = await import(`${R}/utils/groceryAisles.js`);
++const { normalizeRecipe, recipeSignature } = await import(`${R}/utils/recipeModel.js`);
++const { encodeRecipeForQr, decodeRecipeFromQr } = await import(`${R}/services/recipeQr.js`);
++const { INITIAL_RECIPES } = await import(`${R}/data/mockRecipes.js`);
++
++test('scaleAmount', () => {
++  assert.equal(scaleAmount('150', 2), '300');
++  assert.equal(scaleAmount('1/2', 2), '1');
++  assert.equal(scaleAmount('1 1/2', 2), '3');
++  assert.equal(scaleAmount('2,5', 2), '5');
++  assert.equal(scaleAmount('3', 0.5), '1,5');
++  assert.equal(scaleAmount('Vừa đủ', 3), 'Vừa đủ');
++  assert.equal(scaleAmount(6, 0.5), '3');
++  assert.equal(scaleAmount('1/4', 0.25), '0,1');
++  assert.equal(scaleAmount('150', 1), '150');
++});
++test('addAmounts', () => {
++  assert.equal(addAmounts('150', '90'), '240');
++  assert.equal(addAmounts('0,5', '1/2'), '1');
++  assert.equal(addAmounts('Vừa đủ', '2'), null);
++  assert.equal(parseAmount(''), null);
++});
++test('parseIntInRange', () => {
++  assert.equal(parseIntInRange('0', 0, 10), 0);
++  assert.equal(parseIntInRange('-1', 0, 10), null);
++  assert.equal(parseIntInRange('1.5', 0, 10), null);
++  assert.equal(parseIntInRange('abc', 0, 10), null);
++});
++test('Vietnamese search', () => {
++  assert.equal(normalizeVi('Đường Phèn'), 'duong phen');
++  assert.ok(matchesSearch(['Bò Lúc Lắc Sốt Tiêu'], 'bo luc'));
++  assert.ok(matchesSearch(['Trứng gà ta'], 'TRUNG'));
++  assert.ok(!matchesSearch(['Nước tương'], 'oc'));
++  assert.ok(!containsPhrase('nuoc mam', 'oc'));
++});
++test('grocery aisles', () => {
++  const cases = { 'Nước tương ngon': 'pantry', 'Nước mắm': 'pantry', 'Dầu ăn': 'pantry', 'Đường': 'pantry', 'Trứng gà ta': 'dairy',
++    'Sữa tươi không đường': 'dairy', 'Quả bơ sáp chín': 'produce', 'Thịt bò phi lê': 'meat', 'Ốc hương': 'seafood', 'Tôm sú': 'seafood',
++    'Cà rốt': 'produce', 'Bột mì': 'bakery', 'Bơ lạt': 'dairy', 'Đậu hũ': 'produce' };
++  for (const [name, aisle] of Object.entries(cases)) assert.equal(getGroceryAisle(name).id, aisle, name);
++});
++test('normalizeRecipe', () => {
++  const r = normalizeRecipe({ title: ' A ', ingredients: [{ id: 'i1', name: 'x' }, { id: 'i1', name: 'y' }, { name: '' }], steps: [{ title: '', instruction: '' }, { instruction: 'do', timerSeconds: 'abc' }], servings: 0 });
++  assert.equal(r.title, 'A');
++  assert.equal(r.ingredients.length, 2);
++  assert.notEqual(r.ingredients[0].id, r.ingredients[1].id);
++  assert.equal(r.steps.length, 1);
++  assert.equal(r.steps[0].stepNumber, 1);
++  assert.equal(r.steps[0].timerSeconds, null);
++  assert.equal(r.servings, 1);
++  assert.equal(normalizeRecipe({ title: '' }), null);
++  INITIAL_RECIPES.forEach(x => assert.ok(normalizeRecipe(x)));
++});
++test('QR round trip + local media dropped', () => {
++  for (const recipe of INITIAL_RECIPES) {
++    const { payload, truncated, tooLarge } = encodeRecipeForQr(recipe);
++    const back = decodeRecipeFromQr(payload);
++    assert.equal(back.title, recipe.title);
++    assert.equal(back.ingredients.length, recipe.ingredients.length);
++    assert.equal(back.steps.length, recipe.steps.length);
++    assert.equal(recipeSignature(back), recipeSignature(recipe));
++    assert.equal(tooLarge, false);
++    if (!truncated) assert.equal(back.videoUrl, recipe.videoUrl);
++  }
++  const local = { ...INITIAL_RECIPES[0], imageUrl: 'file:///x.jpg', videoUrl: undefined };
++  assert.ok(!encodeRecipeForQr(local).payload.includes('file://'));
++  assert.throws(() => decodeRecipeFromQr('CF1:{bad'));
++});
+diff --git a/scripts/test-loader.mjs b/scripts/test-loader.mjs
+new file mode 100644
+index 0000000..5c2bb78
+--- /dev/null
++++ b/scripts/test-loader.mjs
+@@ -0,0 +1,16 @@
++// Lets Node run the app's ESM sources directly (extension-less imports, .js files treated as modules).
++// Used by `npm run test:logic`.
++import { register } from 'node:module';
++
++const hooks = `
++export async function resolve(spec, ctx, next) {
++  try { return await next(spec, ctx); } catch (e) {
++    if (spec.startsWith('.') || spec.startsWith('/')) return next(spec + '.js', ctx);
++    throw e;
++  }
++}
++export async function load(url, ctx, next) {
++  if (url.includes('/src/') && url.endsWith('.js')) return { ...(await next(url, { ...ctx, format: 'module' })), format: 'module' };
++  return next(url, ctx);
++}`;
++register(`data:text/javascript,${encodeURIComponent(hooks)}`, import.meta.url);
+diff --git a/src/app/index.jsx b/src/app/index.jsx
+index cd64628..a39df16 100644
+--- a/src/app/index.jsx
++++ b/src/app/index.jsx
+@@ -1,5 +1,5 @@
+ import React, { useState, useMemo } from 'react';
+-import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image } from 'react-native';
++import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image, Platform } from 'react-native';
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { useRecipes } from '../context/RecipeContext';
+ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
+@@ -14,7 +14,10 @@ import { ShoppingListModal } from '../components/ShoppingListModal';
+ import { QrScannerModal } from '../components/QrScannerModal';
+ import { PantryFinderModal } from '../components/PantryFinderModal';
+ import { FloatingTimerWidget } from '../components/ui/FloatingTimerWidget';
+-const CATEGORIES = ['Tất cả', 'Món nhanh ⚡', 'Món chính 🍲', 'Ăn kiêng 🥗', 'Tráng miệng 🍰', 'Thức uống 🍹'];
++import { matchesSearch } from '../utils/text';
++import { hasTimer, hasVideo, totalMinutes } from '../utils/recipeModel';
++import { showAlert } from '../utils/dialog';
++import { CATEGORIES } from '../types/recipe';
+ export default function AppMainScreen() {
+   const {
+     recipes,
+@@ -27,8 +30,12 @@ export default function AppMainScreen() {
+     toggleFavorite,
+     isFavorite,
+     hasSeenOnboarding,
+-    shoppingList
++    isHydrated,
++    shoppingList,
++    cookingTimer,
++    getRecipeById
+   } = useRecipes();
++  const [cookingStartStep, setCookingStartStep] = useState(null);
+ 
+   // Navigation tab state: 'explore' | 'myRecipes'
+   const [currentTab, setCurrentTab] = useState('explore');
+@@ -45,14 +52,35 @@ export default function AppMainScreen() {
+   const [isPantryVisible, setIsPantryVisible] = useState(false);
+ 
+   // Filtered recipes
++  // Diacritic-insensitive: "pho bo" finds "Phở bò", "duong" finds "Đường"
+   const filteredRecipes = useMemo(() => {
+     return recipes.filter(recipe => {
+       const matchCat = selectedCategory === 'Tất cả' || recipe.category === selectedCategory;
+-      const matchQuery = searchQuery.trim() === '' || recipe.title.toLowerCase().includes(searchQuery.toLowerCase()) || recipe.description.toLowerCase().includes(searchQuery.toLowerCase()) || recipe.ingredients.some(i => i.name.toLowerCase().includes(searchQuery.toLowerCase()));
++      const matchQuery = matchesSearch([recipe.title, recipe.description, recipe.category, ...(recipe.ingredients || []).map(i => i.name)], searchQuery);
+       return matchCat && matchQuery;
+     });
+   }, [recipes, selectedCategory, searchQuery]);
+-  const featuredRecipe = recipes[0];
++  const featuredRecipe = recipes.find(r => !r.isCustom) || recipes[0];
++  const pendingShoppingCount = shoppingList.filter(item => !item.checked).length;
++  const isFiltering = searchQuery.trim() !== '' || selectedCategory !== 'Tất cả';
++  const openCooking = (recipe, stepIndex = null) => {
++    if (!recipe?.steps?.length) {
++      showAlert('Chưa có bước nấu', 'Công thức này chưa có bước hướng dẫn nào. Hãy sửa công thức để thêm bước trước khi nấu.');
++      return;
++    }
++    setActiveRecipeForCooking(recipe);
++    setCookingStartStep(stepIndex);
++    // iOS cannot present a modal while another one is still dismissing
++    if (Platform.OS === 'ios') setTimeout(() => setIsCookingVisible(true), 450);
++    else setIsCookingVisible(true);
++  };
++  const reopenTimerStep = () => {
++    const recipe = cookingTimer ? getRecipeById(cookingTimer.recipeId) : null;
++    if (!recipe) return;
++    setActiveRecipeForCooking(recipe);
++    setCookingStartStep(cookingTimer.stepIndex);
++    setIsCookingVisible(true);
++  };
+   const handleEditRecipe = recipe => {
+     setEditingRecipe(recipe);
+     setIsCreateModalVisible(true);
+@@ -88,7 +116,7 @@ export default function AppMainScreen() {
+             </Pressable>
+ 
+             {/* Shopping List Button */}
+-            <Pressable onPress={() => setIsShoppingListVisible(true)} style={({
++            <Pressable accessibilityRole="button" accessibilityLabel={`Danh sách đi chợ, còn ${pendingShoppingCount} món cần mua`} onPress={() => setIsShoppingListVisible(true)} style={({
+             pressed
+           }) => [styles.headerActionBtn, {
+             transform: [{
+@@ -96,13 +124,13 @@ export default function AppMainScreen() {
+             }]
+           }]}>
+               <Text style={styles.headerActionIcon}>🛒</Text>
+-              {shoppingList.length > 0 ? <View style={styles.badgeCounter}>
+-                  <Text style={styles.badgeCounterText}>{shoppingList.length}</Text>
++              {pendingShoppingCount > 0 ? <View style={styles.badgeCounter}>
++                  <Text style={styles.badgeCounterText}>{pendingShoppingCount > 99 ? '99+' : pendingShoppingCount}</Text>
+                 </View> : null}
+             </Pressable>
+ 
+             {/* Settings Button */}
+-            <Pressable onPress={() => setIsSettingsModalVisible(true)} style={({
++            <Pressable accessibilityRole="button" accessibilityLabel="Cài đặt" onPress={() => setIsSettingsModalVisible(true)} style={({
+             pressed
+           }) => [styles.headerActionBtn, {
+             transform: [{
+@@ -118,7 +146,7 @@ export default function AppMainScreen() {
+             {/* Heron Precision Search Bar */}
+             <View style={styles.searchBar}>
+               <Text style={styles.searchIcon}>⌕</Text>
+-              <TextInput style={styles.searchInput} placeholder="Tìm kiếm công thức, nguyên liệu..." placeholderTextColor={HeronColors.disable} value={searchQuery} onChangeText={setSearchQuery} />
++              <TextInput style={styles.searchInput} placeholder="Tìm kiếm công thức, nguyên liệu..." placeholderTextColor={HeronColors.disable} value={searchQuery} onChangeText={setSearchQuery} returnKeyType="search" autoCorrect={false} clearButtonMode="never" />
+               {searchQuery.length > 0 ? <Pressable onPress={() => setSearchQuery('')} style={styles.clearSearchBtn}>
+                   <Text style={styles.clearSearchText}>✕</Text>
+                 </Pressable> : null}
+@@ -148,7 +176,7 @@ export default function AppMainScreen() {
+             </ScrollView>
+ 
+             {/* Featured Hero Card (Architectural Poster) */}
+-            {searchQuery.trim() === '' && selectedCategory === 'Tất cả' && featuredRecipe ? <Pressable onPress={() => setSelectedRecipeForDetail(featuredRecipe)} style={({
++            {!isFiltering && featuredRecipe ? <Pressable onPress={() => setSelectedRecipeForDetail(featuredRecipe)} style={({
+           pressed
+         }) => [styles.heroCard, {
+           transform: [{
+@@ -182,22 +210,22 @@ export default function AppMainScreen() {
+                     <View style={styles.heroMetaRow}>
+                       <View style={styles.heroMetaPill}>
+                         <Text style={styles.heroMetaText}>
+-                          ⏱ {featuredRecipe.prepTimeMinutes + featuredRecipe.cookTimeMinutes} PHÚT
++                          ⏱ {totalMinutes(featuredRecipe)} PHÚT
+                         </Text>
+                       </View>
+                       <View style={styles.heroMetaPill}>
+                         <Text style={styles.heroMetaText}>🎯 {featuredRecipe.difficulty.toUpperCase()}</Text>
+                       </View>
+-                      <View style={[styles.heroMetaPill, {
++                      {hasVideo(featuredRecipe) || hasTimer(featuredRecipe) ? <View style={[styles.heroMetaPill, {
+                   backgroundColor: HeronColors.brand
+                 }]}>
+                         <Text style={[styles.heroMetaText, {
+                     color: '#FFFFFF',
+                     fontWeight: '900'
+                   }]}>
+-                          🎥 VIDEO & ⏱ TIMER
++                          {[hasVideo(featuredRecipe) && '🎥 VIDEO', hasTimer(featuredRecipe) && '⏱ TIMER'].filter(Boolean).join(' & ')}
+                         </Text>
+-                      </View>
++                      </View> : null}
+                     </View>
+                   </View>
+                 </View>
+@@ -208,7 +236,7 @@ export default function AppMainScreen() {
+               <View style={styles.sectionTitleRow}>
+                 <View style={styles.sectionSquare} />
+                 <Text style={styles.sectionTitle}>
+-                  {selectedCategory === 'Tất cả' ? 'DANH SÁCH CÔNG THỨC' : selectedCategory.toUpperCase()}
++                  {searchQuery.trim() ? 'KẾT QUẢ TÌM KIẾM' : selectedCategory === 'Tất cả' ? 'DANH SÁCH CÔNG THỨC' : selectedCategory.toUpperCase()}
+                 </Text>
+               </View>
+               <Text style={styles.sectionCount}>[{filteredRecipes.length}]</Text>
+@@ -221,6 +249,12 @@ export default function AppMainScreen() {
+                 <Text style={styles.noResultText}>
+                   Hãy thử từ khóa khác hoặc chuyển sang danh mục khác.
+                 </Text>
++                {isFiltering ? <Pressable onPress={() => {
++              setSearchQuery('');
++              setSelectedCategory('Tất cả');
++            }} style={styles.resetFilterBtn}>
++                    <Text style={styles.resetFilterText}>Xóa bộ lọc</Text>
++                  </Pressable> : null}
+               </View> : <View style={styles.recipeGrid}>
+                 {filteredRecipes.map(item => {
+             const isFav = isFavorite(item.id);
+@@ -236,9 +270,9 @@ export default function AppMainScreen() {
+                         <Image source={{
+                   uri: item.imageUrl
+                 }} style={styles.cardImage} resizeMode="cover" />
+-                        <View style={styles.cardVideoTag}>
++                        {hasVideo(item) ? <View style={styles.cardVideoTag}>
+                           <Text style={styles.cardVideoTagText}>🎥 VIDEO</Text>
+-                        </View>
++                        </View> : null}
+                         <Pressable onPress={e => {
+                   e.stopPropagation();
+                   toggleFavorite(item.id);
+@@ -252,7 +286,7 @@ export default function AppMainScreen() {
+                         <View style={styles.cardTopMeta}>
+                           <AppleBadge label={item.category} variant="coral" />
+                           <Text style={styles.cardTimeMeta}>
+-                            ⏱ {item.prepTimeMinutes + item.cookTimeMinutes}P
++                            ⏱ {totalMinutes(item)}P
+                           </Text>
+                         </View>
+ 
+@@ -267,13 +301,15 @@ export default function AppMainScreen() {
+                           <Text style={styles.cardSpecText}>ĐỘ KHÓ: {item.difficulty.toUpperCase()}</Text>
+                           <Text style={styles.cardSpecText}>•</Text>
+                           <Text style={styles.cardSpecText}>{item.steps.length} BƯỚC NẤU</Text>
+-                          <Text style={styles.cardSpecText}>•</Text>
+-                          <Text style={[styles.cardSpecText, {
+-                    color: HeronColors.brand,
+-                    fontWeight: '800'
+-                  }]}>
+-                            ⏱ ĐẾM GIỜ
+-                          </Text>
++                          {hasTimer(item) ? <>
++                              <Text style={styles.cardSpecText}>•</Text>
++                              <Text style={[styles.cardSpecText, {
++                      color: HeronColors.brand,
++                      fontWeight: '800'
++                    }]}>
++                                ⏱ ĐẾM GIỜ
++                              </Text>
++                            </> : null}
+                         </View>
+                       </View>
+                     </Pressable>;
+@@ -281,7 +317,7 @@ export default function AppMainScreen() {
+               </View>}
+ 
+             <View style={{
+-          height: 110
++          height: 170
+         }} />
+           </ScrollView> : <MyRecipesView onSelectRecipe={rec => setSelectedRecipeForDetail(rec)} onEditRecipe={rec => handleEditRecipe(rec)} />}
+ 
+@@ -319,17 +355,20 @@ export default function AppMainScreen() {
+         </View>
+ 
+         {/* Modals */}
+-        <RecipeDetailModal recipe={selectedRecipeForDetail} visible={!!selectedRecipeForDetail} onClose={() => setSelectedRecipeForDetail(null)} onStartCooking={rec => { setActiveRecipeForCooking(rec); setIsCookingVisible(true); }} />
++        <RecipeDetailModal recipe={selectedRecipeForDetail} visible={!!selectedRecipeForDetail} onClose={() => setSelectedRecipeForDetail(null)} onStartCooking={rec => openCooking(rec)} />
+ 
+-        <CookingModeModal recipe={activeRecipeForCooking} visible={!!activeRecipeForCooking && isCookingVisible} onClose={() => setIsCookingVisible(false)} />
++        <CookingModeModal recipe={activeRecipeForCooking} visible={!!activeRecipeForCooking && isCookingVisible} initialStepIndex={cookingStartStep} onClose={() => {
++        setIsCookingVisible(false);
++        setCookingStartStep(null);
++      }} />
+ 
+-        {!isCookingVisible ? <FloatingTimerWidget onPress={() => setIsCookingVisible(true)} /> : null}
++        {!isCookingVisible ? <FloatingTimerWidget onPress={reopenTimerStep} bottomOffset={100} /> : null}
+ 
+         <CreateRecipeModal visible={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} editingRecipe={editingRecipe} />
+ 
+-        <SettingsModal visible={isSettingsModalVisible} onClose={() => setIsSettingsModalVisible(false)} onReopenOnboarding={() => setIsOnboardingVisible(true)} />
++        <SettingsModal visible={isSettingsModalVisible} onClose={() => setIsSettingsModalVisible(false)} onReopenOnboarding={() => setTimeout(() => setIsOnboardingVisible(true), Platform.OS === 'ios' ? 450 : 0)} />
+ 
+-        <OnboardingModal visible={!hasSeenOnboarding || isOnboardingVisible} onClose={() => setIsOnboardingVisible(false)} />
++        <OnboardingModal visible={isHydrated && (!hasSeenOnboarding || isOnboardingVisible)} onClose={() => setIsOnboardingVisible(false)} />
+ 
+         <ShoppingListModal visible={isShoppingListVisible} onClose={() => setIsShoppingListVisible(false)} />
+ 
+@@ -346,6 +385,22 @@ export default function AppMainScreen() {
+     </SafeAreaView>;
+ }
+ const styles = StyleSheet.create({
++  resetFilterBtn: {
++    marginTop: 14,
++    minHeight: 44,
++    paddingHorizontal: 18,
++    borderRadius: Radius.full,
++    borderWidth: 1,
++    borderColor: HeronColors.border,
++    backgroundColor: '#FFFFFF',
++    alignItems: 'center',
++    justifyContent: 'center'
++  },
++  resetFilterText: {
++    fontSize: 13,
++    fontWeight: '800',
++    color: HeronColors.brand
++  },
+   safeArea: {
+     flex: 1,
+     backgroundColor: HeronColors.canvas
+diff --git a/src/components/AiChefChatModal.jsx b/src/components/AiChefChatModal.jsx
+index 40e795e..d083aac 100644
+--- a/src/components/AiChefChatModal.jsx
++++ b/src/components/AiChefChatModal.jsx
+@@ -1,10 +1,11 @@
+ import React, { useEffect, useRef, useState } from 'react';
+-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Linking, Alert } from 'react-native';
++import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Linking } from 'react-native';
+ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
+ import { AppleButton } from './ui/AppleButton';
+ import { askSousChef, extractIngredientChanges, getGeminiApiKey, saveGeminiApiKey, clearGeminiApiKey, GEMINI_KEY_URL } from '../services/gemini';
+ import { buildPersonalVariant, shoppingItemsForChanges } from '../services/recipeVariant';
+ import { useRecipes } from '../context/RecipeContext';
++import { showAlert } from '../utils/dialog';
+ export const SOUS_CHEF_SUGGESTIONS = [{
+   icon: '💡',
+   label: 'Thay thế gia vị',
+@@ -199,7 +200,7 @@ export const AiChefChatModal = ({
+   const handleAddToCart = () => {
+     const items = shoppingItemsForChanges(selectedChanges);
+     if (items.length === 0) {
+-      Alert.alert('Không có gì để mua', 'Các thay đổi đã chọn chỉ bỏ bớt nguyên liệu.');
++      showAlert('Không có gì để mua', 'Các thay đổi đã chọn chỉ bỏ bớt nguyên liệu.');
+       return;
+     }
+     addToShoppingList(items, `${recipe.title} • thay thế AI`);
+@@ -213,7 +214,7 @@ export const AiChefChatModal = ({
+     const targetIds = new Set(target.ingredients.map(i => i.id));
+     const applicable = selectedChanges.filter(c => targetIds.has(c.replacesId));
+     if (applicable.length === 0) {
+-      Alert.alert('Đã áp dụng trước đó', `Các nguyên liệu này đã được thay trong "${target.title}".`);
++      showAlert('Đã áp dụng trước đó', `Các nguyên liệu này đã được thay trong "${target.title}".`);
+       return;
+     }
+     const result = buildPersonalVariant(target, applicable);
+diff --git a/src/components/CookingModeModal.jsx b/src/components/CookingModeModal.jsx
+index d56d3a8..002098d 100644
+--- a/src/components/CookingModeModal.jsx
++++ b/src/components/CookingModeModal.jsx
+@@ -1,5 +1,5 @@
+ import React, { useEffect, useState } from 'react';
+-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
++import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform } from 'react-native';
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
+ import { TimerCircle } from './ui/TimerCircle';
+@@ -7,31 +7,62 @@ import { StepVideoPlayer } from './ui/StepVideoPlayer';
+ import { AppleButton } from './ui/AppleButton';
+ import { AiChefChatModal } from './AiChefChatModal';
+ import * as Speech from 'expo-speech';
++import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
++import { useRecipes } from '../context/RecipeContext';
++import { confirmAction } from '../utils/dialog';
++import { formatTimer } from './ui/TimerCircle';
++const KEEP_AWAKE_TAG = 'cookflow-cooking-mode';
++const pad2 = n => String(n).padStart(2, '0');
+ export const CookingModeModal = ({
+   recipe,
+   visible,
+-  onClose
++  onClose,
++  initialStepIndex = null
+ }) => {
++  const { cookingTimer, timerSecondsLeft, clearTimer, settings, setActiveRecipeForCooking } = useRecipes();
+   const [currentStepIndex, setCurrentStepIndex] = useState(0);
+   const [isCelebrationVisible, setIsCelebrationVisible] = useState(false);
+   const [viewMode, setViewMode] = useState('video');
+   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
+   const [voiceEnabled, setVoiceEnabled] = useState(false);
+-  const currentStep = recipe?.steps[currentStepIndex];
+-  const totalSteps = recipe?.steps.length ?? 0;
+-  const progressPercent = Math.round((currentStepIndex + 1) / totalSteps * 100);
+-  const isLastStep = currentStepIndex === totalSteps - 1;
++  const totalSteps = recipe?.steps?.length ?? 0;
++  const safeStepIndex = Math.min(currentStepIndex, Math.max(0, totalSteps - 1));
++  const currentStep = recipe?.steps?.[safeStepIndex];
++  const progressPercent = totalSteps ? Math.round((safeStepIndex + 1) / totalSteps * 100) : 0;
++  const isLastStep = safeStepIndex === totalSteps - 1;
++  const timerOfThisRecipe = cookingTimer && cookingTimer.recipeId === recipe?.id ? cookingTimer : null;
+   useEffect(() => {
+     setCurrentStepIndex(0);
+     setVoiceEnabled(false);
++    setIsCelebrationVisible(false);
++    setViewMode('video');
+   }, [recipe?.id]);
++  // Reopened from the floating timer: jump to the step that owns the timer
++  useEffect(() => {
++    if (visible && initialStepIndex != null && initialStepIndex < totalSteps) {
++      setCurrentStepIndex(initialStepIndex);
++    }
++  }, [visible, initialStepIndex, totalSteps]);
++  // Optional custom timer tab only applies to the step where it was opened
++  useEffect(() => {
++    setViewMode('video');
++  }, [currentStepIndex]);
++  // Keep the screen on while cooking (setting in Cài đặt)
++  useEffect(() => {
++    if (!visible || !settings.keepAwake || Platform.OS === 'web') return undefined;
++    activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {});
++    return () => {
++      deactivateKeepAwake(KEEP_AWAKE_TAG).catch?.(() => {});
++    };
++  }, [visible, settings.keepAwake]);
+   useEffect(() => {
+     if (visible && voiceEnabled && currentStep) {
+       Speech.stop();
+       Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, { language: 'vi-VN' });
+     }
+     return () => { Speech.stop(); };
+-  }, [visible, voiceEnabled, recipe?.id, currentStepIndex]);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [visible, voiceEnabled, recipe?.id, safeStepIndex]);
+   const speakCurrentStep = () => {
+     if (!currentStep) return;
+     Speech.stop();
+@@ -40,31 +71,38 @@ export const CookingModeModal = ({
+   if (!recipe || !currentStep) return null;
+   const handleNext = () => {
+     if (isLastStep) {
++      Speech.stop();
+       setIsCelebrationVisible(true);
+     } else {
+-      setCurrentStepIndex(prev => prev + 1);
++      setCurrentStepIndex(Math.min(totalSteps - 1, safeStepIndex + 1));
+     }
+   };
+   const handlePrev = () => {
+-    if (currentStepIndex > 0) {
+-      setCurrentStepIndex(prev => prev - 1);
++    if (safeStepIndex > 0) {
++      setCurrentStepIndex(safeStepIndex - 1);
+     }
+   };
+   const handleExit = () => {
+-    Alert.alert('Dừng phiên nấu ăn?', 'Bạn có chắc muốn thoát chế độ Cooking Assistant này không?', [{
+-      text: 'Tiếp tục nấu',
+-      style: 'cancel'
+-    }, {
+-      text: 'Thoát ra',
+-      style: 'destructive',
+-      onPress: () => {
++    const timerActive = timerOfThisRecipe && timerOfThisRecipe.status !== 'done';
++    confirmAction({
++      title: 'Tạm rời chế độ nấu?',
++      message: timerActive
++        ? `Timer "${timerOfThisRecipe.stepTitle}" vẫn tiếp tục chạy (${formatTimer(timerSecondsLeft)}). Bạn có thể mở lại từ thanh timer ở màn hình chính.`
++        : 'Tiến độ bước hiện tại được giữ lại cho đến khi bạn chọn món khác.',
++      confirmText: 'Rời đi',
++      cancelText: 'Tiếp tục nấu',
++      onConfirm: () => {
++        Speech.stop();
+         onClose();
+       }
+-    }]);
++    });
+   };
+   const handleFinishCooking = () => {
++    Speech.stop();
++    if (timerOfThisRecipe) clearTimer();
+     setIsCelebrationVisible(false);
+     setCurrentStepIndex(0);
++    setActiveRecipeForCooking(null);
+     onClose();
+   };
+   return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} onRequestClose={handleExit}>
+@@ -83,7 +121,7 @@ export const CookingModeModal = ({
+             <View style={styles.phaseBadge}>
+               <View style={styles.livePulse} />
+               <Text style={styles.phaseText}>
+-                GIAI ĐOẠN 0{currentStepIndex + 1} // 0{totalSteps}
++                GIAI ĐOẠN {pad2(safeStepIndex + 1)} // {pad2(totalSteps)}
+               </Text>
+             </View>
+ 
+@@ -159,11 +197,7 @@ export const CookingModeModal = ({
+                   </Text>
+                 </View>
+ 
+-                <TimerCircle key={`timer_${recipe.id}_${currentStepIndex}`} initialSeconds={currentStep.timerSeconds || 180} stepTitle={currentStep.title} onFinish={() => {
+-              Alert.alert('⏰ ĐÃ HẾT GIỜ BƯỚC NẤU!', `Bạn đã hoàn thành giai đoạn "${currentStep.title}". Hãy chuyển sang bước tiếp theo để đảm bảo hương vị chuẩn nhất!`, [{
+-                text: 'ĐÃ HIỂU ✓'
+-              }]);
+-            }} />
++                <TimerCircle key={`timer_${recipe.id}_${safeStepIndex}`} recipe={recipe} stepIndex={safeStepIndex} defaultSeconds={currentStep.timerSeconds || 180} />
+               </View> : null}
+           </View>
+ 
+@@ -174,7 +208,7 @@ export const CookingModeModal = ({
+ 
+         {/* Bottom Navigation Dock */}
+         <View style={styles.footer}>
+-          <Pressable onPress={handlePrev} disabled={currentStepIndex === 0} style={[styles.navBtn, styles.prevBtn, currentStepIndex === 0 && styles.btnDisabled]}>
++          <Pressable onPress={handlePrev} disabled={safeStepIndex === 0} style={[styles.navBtn, styles.prevBtn, safeStepIndex === 0 && styles.btnDisabled]}>
+             <Text style={styles.prevBtnText}>‹ BƯỚC TRƯỚC</Text>
+           </Pressable>
+ 
+@@ -198,13 +232,16 @@ export const CookingModeModal = ({
+ 
+               <View style={styles.celebrationMeta}>
+                 <Text style={styles.celebrationMetaText}>
+-                  TRẠNG THÁI: KIỂM SOÁT THỜI GIAN & VIDEO CHUẨN XÁC 100%
++                  {totalSteps} BƯỚC • {(recipe.prepTimeMinutes || 0) + (recipe.cookTimeMinutes || 0)} PHÚT THEO CÔNG THỨC
+                 </Text>
+               </View>
+ 
+               <AppleButton title="XÁC NHẬN & QUAY VỀ TRANG CHỦ" size="lg" variant="primary" onPress={handleFinishCooking} style={{
+             width: '100%'
+           }} />
++              <Pressable onPress={() => setIsCelebrationVisible(false)} style={styles.celebrationBack}>
++                <Text style={styles.celebrationBackText}>‹ Quay lại bước cuối</Text>
++              </Pressable>
+             </View>
+           </View>}
+ 
+@@ -213,6 +250,17 @@ export const CookingModeModal = ({
+     </Modal>;
+ };
+ const styles = StyleSheet.create({
++  celebrationBack: {
++    marginTop: 12,
++    minHeight: 44,
++    alignItems: 'center',
++    justifyContent: 'center'
++  },
++  celebrationBackText: {
++    fontSize: 13,
++    fontWeight: '700',
++    color: HeronColors.granite
++  },
+   container: {
+     flex: 1,
+     backgroundColor: HeronColors.canvas
+diff --git a/src/components/CreateRecipeModal.jsx b/src/components/CreateRecipeModal.jsx
+index dab0bb1..af55f65 100644
+--- a/src/components/CreateRecipeModal.jsx
++++ b/src/components/CreateRecipeModal.jsx
+@@ -1,10 +1,15 @@
+ import React, { useState, useEffect } from 'react';
+-import { Modal, View, Text, StyleSheet, ScrollView, TextInput, Pressable, Alert, KeyboardAvoidingView, Platform, Image } from 'react-native';
++import { Modal, View, Text, StyleSheet, ScrollView, TextInput, Pressable, KeyboardAvoidingView, Platform, Image } from 'react-native';
++import { confirmAction, showAlert } from '../utils/dialog';
++import { parseIntInRange } from '../utils/quantity';
++import { normalizeVi } from '../utils/text';
++import { DEFAULT_RECIPE_IMAGE, makeId } from '../utils/recipeModel';
++import { CATEGORIES as ALL_CATEGORIES } from '../types/recipe';
+ import * as ImagePicker from 'expo-image-picker';
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
+ import { useRecipes } from '../context/RecipeContext';
+-const CATEGORIES = ['Món nhanh ⚡', 'Món chính 🍲', 'Ăn kiêng 🥗', 'Tráng miệng 🍰', 'Thức uống 🍹'];
++const CATEGORIES = ALL_CATEGORIES.filter(cat => cat !== 'Tất cả');
+ const DIFFICULTIES = ['Dễ', 'Vừa', 'Khó'];
+ export const CreateRecipeModal = ({
+   visible,
+@@ -70,7 +75,7 @@ export const CreateRecipeModal = ({
+       setSteps(editingRecipe.steps.map(s => ({
+         title: s.title,
+         instruction: s.instruction,
+-        timerMinutes: s.timerSeconds ? Math.floor(s.timerSeconds / 60).toString() : '',
++        timerMinutes: s.timerSeconds ? Math.max(1, Math.round(s.timerSeconds / 60)).toString() : '',
+         tip: s.tip || '',
+         image: s.image,
+         videoUrl: s.videoUrl
+@@ -112,7 +117,7 @@ export const CreateRecipeModal = ({
+         status
+       } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+       if (status !== 'granted') {
+-        Alert.alert('Cần quyền truy cập Album', 'Vui lòng cấp quyền truy cập thư viện ảnh để tải ảnh món ăn từ máy của bạn.');
++        showAlert('Cần quyền truy cập Album', 'Vui lòng cấp quyền truy cập thư viện ảnh để tải ảnh món ăn từ máy của bạn.');
+         return;
+       }
+       const result = await ImagePicker.launchImageLibraryAsync({
+@@ -125,7 +130,7 @@ export const CreateRecipeModal = ({
+         setImageUrl(result.assets[0].uri);
+       }
+     } catch (e) {
+-      Alert.alert('Lỗi', 'Không thể mở thư viện ảnh: ' + String(e));
++      showAlert('Lỗi', 'Không thể mở thư viện ảnh: ' + String(e));
+     }
+   };
+   const pickMainVideoFromLibrary = async () => {
+@@ -134,7 +139,7 @@ export const CreateRecipeModal = ({
+         status
+       } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+       if (status !== 'granted') {
+-        Alert.alert('Cần quyền truy cập Album', 'Vui lòng cấp quyền truy cập thư viện để tải video giới thiệu món ăn từ máy của bạn.');
++        showAlert('Cần quyền truy cập Album', 'Vui lòng cấp quyền truy cập thư viện để tải video giới thiệu món ăn từ máy của bạn.');
+         return;
+       }
+       const result = await ImagePicker.launchImageLibraryAsync({
+@@ -146,7 +151,7 @@ export const CreateRecipeModal = ({
+         setVideoUrl(result.assets[0].uri);
+       }
+     } catch (e) {
+-      Alert.alert('Lỗi', 'Không thể mở thư viện video: ' + String(e));
++      showAlert('Lỗi', 'Không thể mở thư viện video: ' + String(e));
+     }
+   };
+   const pickStepImageFromLibrary = async index => {
+@@ -155,7 +160,7 @@ export const CreateRecipeModal = ({
+         status
+       } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+       if (status !== 'granted') {
+-        Alert.alert('Cần quyền truy cập', 'Vui lòng cấp quyền mở album ảnh để chọn ảnh cho bước này.');
++        showAlert('Cần quyền truy cập', 'Vui lòng cấp quyền mở album ảnh để chọn ảnh cho bước này.');
+         return;
+       }
+       const result = await ImagePicker.launchImageLibraryAsync({
+@@ -167,7 +172,7 @@ export const CreateRecipeModal = ({
+         updateStepField(index, 'image', result.assets[0].uri);
+       }
+     } catch (e) {
+-      Alert.alert('Lỗi', 'Không thể chọn ảnh: ' + String(e));
++      showAlert('Lỗi', 'Không thể chọn ảnh: ' + String(e));
+     }
+   };
+   const pickStepVideoFromLibrary = async index => {
+@@ -176,7 +181,7 @@ export const CreateRecipeModal = ({
+         status
+       } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+       if (status !== 'granted') {
+-        Alert.alert('Cần quyền truy cập', 'Vui lòng cấp quyền mở album để chọn video cho bước này.');
++        showAlert('Cần quyền truy cập', 'Vui lòng cấp quyền mở album để chọn video cho bước này.');
+         return;
+       }
+       const result = await ImagePicker.launchImageLibraryAsync({
+@@ -188,14 +193,14 @@ export const CreateRecipeModal = ({
+         updateStepField(index, 'videoUrl', result.assets[0].uri);
+       }
+     } catch (e) {
+-      Alert.alert('Lỗi', 'Không thể chọn video: ' + String(e));
++      showAlert('Lỗi', 'Không thể chọn video: ' + String(e));
+     }
+   };
+ 
+   // Ingredients handlers
+   const addIngredientRow = () => {
+     setIngredients(prev => [...prev, {
+-      id: Date.now().toString(),
++      id: makeId('i'),
+       name: '',
+       amount: '',
+       unit: 'muỗng'
+@@ -242,62 +247,89 @@ export const CreateRecipeModal = ({
+     }
+   };
+   const handleSave = () => {
+-    if (!title.trim()) {
+-      Alert.alert('Chưa nhập tên món', 'Vui lòng nhập tên món ăn của bạn nhé!');
+-      return;
+-    }
+-    const validIngredients = ingredients.filter(i => i.name.trim() !== '');
+-    if (validIngredients.length === 0) {
+-      Alert.alert('Thiếu nguyên liệu', 'Vui lòng nhập ít nhất 1 nguyên liệu!');
++    const errors = [];
++    const cleanTitle = title.trim();
++    if (!cleanTitle) errors.push('Nhập tên món ăn.');
++    const prep = parseIntInRange(prepTime, 0, 1440);
++    const cook = parseIntInRange(cookTime, 0, 1440);
++    const portions = parseIntInRange(servings, 1, 50);
++    if (prep === null) errors.push('Thời gian sơ chế phải là số phút từ 0 đến 1440.');
++    if (cook === null) errors.push('Thời gian nấu phải là số phút từ 0 đến 1440.');
++    if (prep !== null && cook !== null && prep + cook === 0) errors.push('Tổng thời gian sơ chế + nấu phải lớn hơn 0 phút.');
++    if (portions === null) errors.push('Khẩu phần phải từ 1 đến 50 người.');
++    const validIngredients = ingredients
++      .filter(i => (i.name || '').trim() !== '')
++      .map((i, idx) => ({ ...i, id: i.id || `i${idx + 1}`, name: i.name.trim(), amount: String(i.amount ?? '').trim() || 'Vừa đủ', unit: String(i.unit ?? '').trim() }));
++    if (validIngredients.length === 0) errors.push('Thêm ít nhất 1 nguyên liệu có tên.');
++    const seenNames = new Set();
++    validIngredients.forEach(i => {
++      const key = normalizeVi(i.name);
++      if (seenNames.has(key)) errors.push(`Nguyên liệu "${i.name}" bị nhập trùng.`);
++      seenNames.add(key);
++    });
++    // A step is kept only if it has instructions; a default title alone is not a real step
++    const filledSteps = steps.filter(s => (s.instruction || '').trim() !== '');
++    if (filledSteps.length === 0) errors.push('Thêm ít nhất 1 bước nấu có nội dung hướng dẫn.');
++    const validSteps = [];
++    filledSteps.forEach((s, idx) => {
++      const minutesText = String(s.timerMinutes ?? '').trim();
++      const minutes = minutesText ? parseIntInRange(minutesText, 1, 600) : null;
++      if (minutesText && minutes === null) errors.push(`Bước ${idx + 1}: hẹn giờ phải là số phút từ 1 đến 600.`);
++      validSteps.push({
++        stepNumber: idx + 1,
++        title: (s.title || '').trim() || `Bước ${idx + 1}`,
++        instruction: s.instruction.trim(),
++        image: s.image?.trim() || undefined,
++        videoUrl: s.videoUrl?.trim() || undefined,
++        timerSeconds: minutes ? minutes * 60 : null,
++        tip: s.tip?.trim() ? s.tip.trim() : undefined
++      });
++    });
++    if (errors.length) {
++      showAlert('Chưa thể lưu công thức', errors.map(e => `• ${e}`).join('\n'));
+       return;
+     }
+-    const validSteps = steps.map((s, idx) => ({
+-      stepNumber: idx + 1,
+-      title: s.title || `Bước ${idx + 1}`,
+-      instruction: s.instruction || 'Thực hiện công đoạn này theo ý thích của bạn.',
+-      image: s.image?.trim() || undefined,
+-      videoUrl: s.videoUrl?.trim() || undefined,
+-      timerSeconds: s.timerMinutes ? parseInt(s.timerMinutes, 10) * 60 : null,
+-      tip: s.tip ? s.tip : undefined
+-    }));
+-    const finalImageUrl = imageUrl.trim() || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80';
++    const finalImageUrl = imageUrl.trim() || DEFAULT_RECIPE_IMAGE;
++    const payload = {
++      title: cleanTitle,
++      description: description.trim() || 'Món ăn tự sáng tạo thơm ngon bổ dưỡng.',
++      imageUrl: finalImageUrl,
++      videoUrl: videoUrl.trim() || undefined,
++      category,
++      prepTimeMinutes: prep,
++      cookTimeMinutes: cook,
++      servings: portions,
++      difficulty,
++      ingredients: validIngredients,
++      steps: validSteps
++    };
+     if (editingRecipe) {
+-      updateRecipe({
+-        ...editingRecipe,
+-        title,
+-        description: description || 'Món ăn tự sáng tạo thơm ngon bổ dưỡng.',
+-        imageUrl: finalImageUrl,
+-        videoUrl: videoUrl.trim() || undefined,
+-        category,
+-        prepTimeMinutes: parseInt(prepTime, 10) || 10,
+-        cookTimeMinutes: parseInt(cookTime, 10) || 15,
+-        servings: parseInt(servings, 10) || 2,
+-        difficulty,
+-        ingredients: validIngredients,
+-        steps: validSteps
+-      });
+-      Alert.alert('Thành công! 🎉', 'Công thức của bạn đã được cập nhật.');
++      updateRecipe({ ...editingRecipe, ...payload });
++      showAlert('Thành công! 🎉', 'Công thức của bạn đã được cập nhật.');
+     } else {
+-      addRecipe({
+-        title,
+-        description: description || 'Món ăn tự sáng tạo thơm ngon bổ dưỡng.',
+-        imageUrl: finalImageUrl,
+-        videoUrl: videoUrl.trim() || undefined,
+-        category,
+-        prepTimeMinutes: parseInt(prepTime, 10) || 10,
+-        cookTimeMinutes: parseInt(cookTime, 10) || 15,
+-        servings: parseInt(servings, 10) || 2,
+-        difficulty,
+-        ingredients: validIngredients,
+-        steps: validSteps,
+-        colorAccent: HeronColors.brand
+-      });
+-      Alert.alert('Thành công! 🎉', 'Món mới đã được lưu vào danh sách của bạn.');
++      addRecipe({ ...payload, colorAccent: HeronColors.brand });
++      showAlert('Thành công! 🎉', 'Món mới đã được lưu vào mục "Của tôi → Tự tạo".');
+     }
+     resetForm();
+     onClose();
+   };
+-  return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} onRequestClose={onClose}>
++  const handleRequestClose = () => {
++    const isDirty = editingRecipe
++      ? title.trim() !== editingRecipe.title
++        || ingredients.length !== editingRecipe.ingredients.length
++        || steps.length !== editingRecipe.steps.length
++      : title.trim() !== '' || ingredients.some(i => (i.name || '').trim()) || steps.some(s => (s.instruction || '').trim());
++    if (!isDirty) return onClose();
++    return confirmAction({
++      title: 'Bỏ thay đổi?',
++      message: 'Nội dung bạn vừa nhập sẽ không được lưu.',
++      confirmText: 'Bỏ thay đổi',
++      cancelText: 'Tiếp tục sửa',
++      destructive: true,
++      onConfirm: onClose
++    });
++  };
++  return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} onRequestClose={handleRequestClose}>
+       <SafeAreaView style={{
+       flex: 1,
+       backgroundColor: HeronColors.canvas
+@@ -308,7 +340,7 @@ export const CreateRecipeModal = ({
+         <View style={styles.container}>
+           {/* Top Bar Header */}
+           <View style={styles.topBar}>
+-            <Pressable onPress={onClose} style={styles.cancelBtn}>
++            <Pressable onPress={handleRequestClose} style={styles.cancelBtn}>
+               <Text style={styles.cancelText}>Hủy</Text>
+             </Pressable>
+             <View style={styles.headerTitleWrap}>
+diff --git a/src/components/MyRecipesView.jsx b/src/components/MyRecipesView.jsx
+index 6a52861..e4fe1bb 100644
+--- a/src/components/MyRecipesView.jsx
++++ b/src/components/MyRecipesView.jsx
+@@ -1,5 +1,7 @@
+ import React, { useState } from 'react';
+-import { View, Text, StyleSheet, ScrollView, Pressable, Image, Alert } from 'react-native';
++import { View, Text, StyleSheet, ScrollView, Pressable, Image } from 'react-native';
++import { confirmAction } from '../utils/dialog';
++import { totalMinutes } from '../utils/recipeModel';
+ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
+ import { AppleBadge } from './ui/AppleBadge';
+ import { useRecipes } from '../context/RecipeContext';
+@@ -10,20 +12,21 @@ export const MyRecipesView = ({
+   const {
+     recipes,
+     favoriteIds,
+-    deleteRecipe
++    deleteRecipe,
++    cookingTimer
+   } = useRecipes();
+   const [activeTab, setActiveTab] = useState('favorites');
+   const favoriteRecipes = recipes.filter(r => favoriteIds.includes(r.id));
+   const customRecipes = recipes.filter(r => r.isCustom);
+   const handleDelete = recipe => {
+-    Alert.alert('Xóa công thức?', `Bạn có chắc muốn xóa công thức "${recipe.title}" vĩnh viễn không?`, [{
+-      text: 'Hủy',
+-      style: 'cancel'
+-    }, {
+-      text: 'Xóa vĩnh viễn',
+-      style: 'destructive',
+-      onPress: () => deleteRecipe(recipe.id)
+-    }]);
++    const isCooking = cookingTimer?.recipeId === recipe.id;
++    confirmAction({
++      title: 'Xóa công thức?',
++      message: `Công thức "${recipe.title}" sẽ bị xóa vĩnh viễn${isCooking ? ' và timer đang chạy của món này sẽ dừng' : ''}.`,
++      confirmText: 'Xóa vĩnh viễn',
++      destructive: true,
++      onConfirm: () => deleteRecipe(recipe.id)
++    });
+   };
+   const currentList = activeTab === 'favorites' ? favoriteRecipes : customRecipes;
+   return <View style={styles.container}>
+@@ -71,7 +74,7 @@ export const MyRecipesView = ({
+                 <View style={styles.badgeRow}>
+                   <AppleBadge label={item.category} variant="coral" />
+                   <Text style={styles.timeText}>
+-                    ⏱ {item.prepTimeMinutes + item.cookTimeMinutes}P
++                    ⏱ {totalMinutes(item)}P
+                   </Text>
+                 </View>
+ 
+@@ -103,7 +106,7 @@ export const MyRecipesView = ({
+             </Pressable>)}
+ 
+         <View style={{
+-        height: 110
++        height: 170
+       }} />
+       </ScrollView>
+     </View>;
+diff --git a/src/components/PantryFinderModal.jsx b/src/components/PantryFinderModal.jsx
+index c44d0a8..734e478 100644
+--- a/src/components/PantryFinderModal.jsx
++++ b/src/components/PantryFinderModal.jsx
+@@ -1,17 +1,30 @@
+ import React, { useMemo, useState } from 'react';
+-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Alert } from 'react-native';
++import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Switch } from 'react-native';
+ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
+ import { useRecipes } from '../context/RecipeContext';
++import { containsPhrase, normalizeVi as normalize } from '../utils/text';
++import { showAlert } from '../utils/dialog';
+ 
+-const normalize = value => (value || '')
+-  .normalize('NFD')
+-  .replace(/[\u0300-\u036f]/g, '')
+-  .toLowerCase()
+-  .trim();
++// Basic seasonings most kitchens always have; optionally not counted as "missing".
++const STAPLES = ['muoi', 'duong', 'tieu', 'nuoc loc', 'dau an', 'hat nem', 'bot ngot', 'nuoc da'];
++export const isStapleIngredient = name => {
++  const key = normalize(name);
++  return STAPLES.some(staple => key === staple || key.startsWith(`${staple} `) || key.startsWith(`${staple},`));
++};
++
++// "Thịt bò" in the pantry covers "Thịt bò phi lê"; exact names always match.
++const isAvailable = (ingredientName, pantryKeys) => {
++  const key = normalize(ingredientName);
++  return pantryKeys.some(p => p === key || containsPhrase(key, p));
++};
+ 
+ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
+   const { recipes, pantryIngredients, togglePantryIngredient, clearPantry, addToShoppingList } = useRecipes();
+   const [query, setQuery] = useState('');
++  const [assumeStaples, setAssumeStaples] = useState(true);
++  const pantryKeys = useMemo(() => pantryIngredients.map(normalize).filter(Boolean), [pantryIngredients]);
++  const trimmedQuery = query.trim();
++  const canAddCustom = trimmedQuery.length > 1 && !pantryKeys.includes(normalize(trimmedQuery));
+ 
+   const ingredientCatalog = useMemo(() => {
+     const unique = new Map();
+@@ -28,29 +41,36 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
+   }, [ingredientCatalog, query]);
+ 
+   const matches = useMemo(() => {
+-    if (pantryIngredients.length === 0) return [];
+-    const available = new Set(pantryIngredients.map(normalize));
++    if (pantryKeys.length === 0) return [];
+     return recipes.map(recipe => {
+       const ingredients = recipe.ingredients || [];
+-      const availableIngredients = ingredients.filter(item => available.has(normalize(item.name)));
+-      const missingIngredients = ingredients.filter(item => !available.has(normalize(item.name)));
+-      return { recipe, availableIngredients, missingIngredients };
++      const availableIngredients = ingredients.filter(item => isAvailable(item.name, pantryKeys));
++      const missingIngredients = ingredients.filter(item => !isAvailable(item.name, pantryKeys) && !(assumeStaples && isStapleIngredient(item.name)));
++      const counted = availableIngredients.length + missingIngredients.length;
++      return { recipe, availableIngredients, missingIngredients, counted };
+     })
+       .filter(result => result.availableIngredients.length > 0)
+       .sort((a, b) => {
+         const aComplete = a.missingIngredients.length === 0 ? 1 : 0;
+         const bComplete = b.missingIngredients.length === 0 ? 1 : 0;
+         return bComplete - aComplete
+-          || b.availableIngredients.length / b.recipe.ingredients.length - a.availableIngredients.length / a.recipe.ingredients.length
+-          || b.availableIngredients.length - a.availableIngredients.length;
++          || a.missingIngredients.length - b.missingIngredients.length
++          || b.availableIngredients.length / Math.max(1, b.counted) - a.availableIngredients.length / Math.max(1, a.counted);
+       });
+-  }, [recipes, pantryIngredients]);
++  }, [recipes, pantryKeys, assumeStaples]);
+ 
+   const handleAddMissing = result => {
+     if (!result.missingIngredients.length) return;
+-    addToShoppingList(result.missingIngredients, result.recipe.title);
+-    Alert.alert('Đã thêm vào giỏ', `Đã thêm ${result.missingIngredients.length} nguyên liệu còn thiếu cho món ${result.recipe.title}.`);
++    const { added, merged } = addToShoppingList(result.missingIngredients, result.recipe.title);
++    showAlert('Đã cập nhật giỏ đi chợ', `Món ${result.recipe.title}: thêm mới ${added}${merged ? `, cộng dồn ${merged}` : ''} nguyên liệu còn thiếu.`);
++  };
++  const handleAddCustom = () => {
++    if (!canAddCustom) return;
++    togglePantryIngredient(trimmedQuery);
++    setQuery('');
+   };
++  // Custom items typed by the user also appear as removable chips
++  const customSelected = pantryIngredients.filter(name => !ingredientCatalog.some(item => normalize(item) === normalize(name)));
+ 
+   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+     <View style={styles.container}>
+@@ -75,6 +95,8 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
+           placeholderTextColor={HeronColors.surface}
+           value={query}
+           onChangeText={setQuery}
++          returnKeyType="done"
++          onSubmitEditing={handleAddCustom}
+         />
+         {query ? <Pressable accessibilityRole="button" accessibilityLabel="Xóa tìm kiếm" hitSlop={4} onPress={() => setQuery('')} style={({ pressed }) => [styles.clearSearch, pressed && styles.pressed]}>
+           <Text style={styles.clearSearchText}>×</Text>
+@@ -91,9 +113,17 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
+         </Pressable> : null}
+       </View>
+ 
+-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.ingredientList}>
++      <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.ingredientList}>
++        {canAddCustom ? <Pressable accessibilityRole="button" onPress={handleAddCustom} style={({ pressed }) => [styles.ingredientChip, styles.ingredientChipSelected, pressed && styles.pressed]}>
++          <Text style={[styles.chipCheck, styles.chipCheckSelected]}>+</Text>
++          <Text style={[styles.ingredientChipText, styles.ingredientChipTextSelected]}>Thêm “{trimmedQuery}”</Text>
++        </Pressable> : null}
++        {customSelected.map(name => <Pressable key={`custom_${normalize(name)}`} accessibilityRole="checkbox" accessibilityState={{ checked: true }} onPress={() => togglePantryIngredient(name)} style={({ pressed }) => [styles.ingredientChip, styles.ingredientChipSelected, pressed && styles.pressed]}>
++          <Text style={[styles.chipCheck, styles.chipCheckSelected]}>✓</Text>
++          <Text style={[styles.ingredientChipText, styles.ingredientChipTextSelected]}>{name}</Text>
++        </Pressable>)}
+         {visibleIngredients.map(name => {
+-          const selected = pantryIngredients.includes(name);
++          const selected = pantryKeys.includes(normalize(name));
+           return <Pressable
+             key={normalize(name)}
+             accessibilityRole="checkbox"
+@@ -105,9 +135,14 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
+             <Text style={[styles.ingredientChipText, selected && styles.ingredientChipTextSelected]}>{name}</Text>
+           </Pressable>;
+         })}
+-        {visibleIngredients.length === 0 ? <Text style={styles.noIngredients}>Không tìm thấy nguyên liệu phù hợp.</Text> : null}
++        {visibleIngredients.length === 0 && !canAddCustom ? <Text style={styles.noIngredients}>Không tìm thấy nguyên liệu phù hợp.</Text> : null}
+       </ScrollView>
+ 
++      <View style={styles.staplesRow}>
++        <Text style={styles.staplesText}>Coi muối, đường, tiêu, dầu ăn… là có sẵn</Text>
++        <Switch value={assumeStaples} onValueChange={setAssumeStaples} trackColor={{ false: HeronColors.border, true: HeronColors.brand }} />
++      </View>
++
+       <View style={styles.resultsHeading}>
+         <View style={styles.resultsTitleRow}>
+           <View style={styles.accentDot} />
+@@ -132,7 +167,7 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
+               <View style={styles.recipeCopy}>
+                 <Text style={styles.recipeTitle} numberOfLines={2}>{result.recipe.title}</Text>
+                 <Text style={styles.recipeMeta}>
+-                  {result.availableIngredients.length}/{result.recipe.ingredients.length} nguyên liệu có sẵn
++                  {result.availableIngredients.length}/{result.counted} nguyên liệu có sẵn
+                   {complete ? ' · Đủ để nấu' : ` · Thiếu ${result.missingIngredients.length}`}
+                 </Text>
+               </View>
+@@ -150,6 +185,8 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
+ };
+ 
+ const styles = StyleSheet.create({
++  staplesRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginHorizontal: Spacing.lg, marginTop: 14 },
++  staplesText: { flex: 1, color: HeronColors.granite, fontSize: 12 },
+   container: { flex: 1, backgroundColor: HeronColors.canvas },
+   dragHandleWrap: { alignItems: 'center', paddingVertical: 10 },
+   dragHandle: { width: 44, height: 5, borderRadius: 3, backgroundColor: '#D1D5DB' },
+diff --git a/src/components/QrScannerModal.jsx b/src/components/QrScannerModal.jsx
+index e61d108..cdbe9d1 100644
+--- a/src/components/QrScannerModal.jsx
++++ b/src/components/QrScannerModal.jsx
+@@ -1,17 +1,19 @@
+ import React, { useRef, useState } from 'react';
+-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Image, Alert, Platform } from 'react-native';
++import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Image, Platform } from 'react-native';
+ import { CameraView, useCameraPermissions } from 'expo-camera';
+ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
+ import { AppleButton } from './ui/AppleButton';
+ import { useRecipes } from '../context/RecipeContext';
+ import { decodeRecipeFromQr } from '../services/recipeQr';
++import { confirmAction, showAlert } from '../utils/dialog';
+ export const QrScannerModal = ({
+   visible,
+   onClose,
+   onImported
+ }) => {
+   const {
+-    addRecipe
++    addRecipe,
++    findDuplicateRecipe
+   } = useRecipes();
+   const [permission, requestPermission] = useCameraPermissions();
+   const [mode, setMode] = useState('camera');
+@@ -52,15 +54,27 @@ export const QrScannerModal = ({
+     setScanError('');
+     isHandlingScanRef.current = false;
+   };
+-  const handleSave = () => {
++  const saveImported = () => {
+     const saved = addRecipe(scannedRecipe);
+     handleClose();
++    if (!saved) return;
+     if (onImported) onImported(saved);
+     // Wait for the sheet to dismiss so the alert is not torn down with it on iOS
+     setTimeout(() => {
+-      Alert.alert('Đã nhận món! 🎉', `"${saved.title}" đã được lưu vào mục Món của tôi.`);
++      showAlert('Đã nhận món! 🎉', `"${saved.title}" đã được lưu vào mục Của tôi → Tự tạo.`);
+     }, 450);
+   };
++  const handleSave = () => {
++    const duplicate = findDuplicateRecipe(scannedRecipe);
++    if (!duplicate) return saveImported();
++    return confirmAction({
++      title: 'Món này đã có trong máy',
++      message: `"${duplicate.title}" có cùng tên và nguyên liệu. Bạn vẫn muốn lưu thêm một bản?`,
++      confirmText: 'Vẫn lưu bản mới',
++      cancelText: 'Không lưu',
++      onConfirm: saveImported
++    });
++  };
+   const renderPreview = () => <View style={styles.previewCard}>
+       <Image source={{
+       uri: scannedRecipe.imageUrl
+diff --git a/src/components/RecipeDetailModal.jsx b/src/components/RecipeDetailModal.jsx
+index 2da4dc8..c8367ca 100644
+--- a/src/components/RecipeDetailModal.jsx
++++ b/src/components/RecipeDetailModal.jsx
+@@ -1,11 +1,15 @@
+ import React, { useEffect, useState } from 'react';
+-import { Modal, View, Text, StyleSheet, ScrollView, Image, Pressable, Alert } from 'react-native';
++import { Modal, View, Text, StyleSheet, ScrollView, Image, Pressable } from 'react-native';
+ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
+ import { AppleBadge } from './ui/AppleBadge';
+ import { AppleButton } from './ui/AppleButton';
+ import { useRecipes } from '../context/RecipeContext';
+ import { AiChefChatModal, SOUS_CHEF_SUGGESTIONS } from './AiChefChatModal';
+ import { ShareRecipeModal } from './ShareRecipeModal';
++import { scaleAmount } from '../utils/quantity';
++import { showAlert } from '../utils/dialog';
++import { hasTimer, hasVideo, totalMinutes } from '../utils/recipeModel';
++const MAX_SERVINGS = 50;
+ export const RecipeDetailModal = ({
+   recipe: recipeProp,
+   visible,
+@@ -28,7 +32,25 @@ export const RecipeDetailModal = ({
+   useEffect(() => {
+     if (recipe) setCurrentServings(recipe.servings);
+   }, [recipe?.id, recipe?.servings]);
++  // Ingredient ids ("i1", "i2"...) repeat across recipes: a new recipe must start with a clean checklist
++  useEffect(() => {
++    setCheckedIngredients({});
++  }, [recipe?.id]);
+   if (!recipe) return null;
++  const ratio = currentServings / Math.max(1, recipe.servings);
++  const readyCount = recipe.ingredients.filter(item => checkedIngredients[item.id]).length;
++  const missingIngredients = recipe.ingredients.filter(item => !checkedIngredients[item.id]);
++  const handleAddToShopping = () => {
++    if (missingIngredients.length === 0) {
++      showAlert('Đã đủ nguyên liệu ✓', 'Bạn đã đánh dấu có sẵn tất cả nguyên liệu, không cần mua thêm.');
++      return;
++    }
++    const { added, merged } = addToShoppingList(missingIngredients.map(item => ({
++      ...item,
++      amount: scaleAmount(item.amount, ratio)
++    })), `${recipe.title} (${currentServings} người)`);
++    showAlert('Đã cập nhật danh sách đi chợ 🛒', [added ? `Thêm mới ${added} nguyên liệu.` : '', merged ? `Cộng dồn ${merged} nguyên liệu đã có trong danh sách.` : ''].filter(Boolean).join(' '));
++  };
+   const isFav = isFavorite(recipe.id);
+   const toggleCheck = id => {
+     setCheckedIngredients(prev => ({
+@@ -75,14 +97,14 @@ export const RecipeDetailModal = ({
+               <AppleBadge label={recipe.category} variant="coral" />
+             </View>
+             <View style={styles.featureBadgeWrap}>
+-              <View style={styles.featureBadge}>
++              {hasVideo(recipe) ? <View style={styles.featureBadge}>
+                 <Text style={styles.featureBadgeText}>🎥 VIDEO TỪNG BƯỚC</Text>
+-              </View>
+-              <View style={[styles.featureBadge, {
++              </View> : null}
++              {hasTimer(recipe) ? <View style={[styles.featureBadge, {
+               backgroundColor: 'rgba(250, 54, 0, 0.92)'
+             }]}>
+-                <Text style={styles.featureBadgeText}>⏱ ĐẾM GIỜ TỰ ĐỘNG</Text>
+-              </View>
++                <Text style={styles.featureBadgeText}>⏱ ĐẾM GIỜ THEO BƯỚC</Text>
++              </View> : null}
+             </View>
+           </View>
+ 
+@@ -92,7 +114,7 @@ export const RecipeDetailModal = ({
+               <Text style={styles.metaCode}>RECIPE SPEC // ID_{recipe.id.toUpperCase()}</Text>
+             </View>
+             <Text style={styles.title}>{recipe.title}</Text>
+-            <Text style={styles.description}>{recipe.description}</Text>
++            {recipe.description ? <Text style={styles.description}>{recipe.description}</Text> : null}
+           </View>
+ 
+           {/* Personal copy adjusted by AI Sous-Chef */}
+@@ -111,16 +133,16 @@ export const RecipeDetailModal = ({
+             <View style={styles.statCell}>
+               <Text style={styles.statKey}>THỜI GIAN</Text>
+               <Text style={styles.statVal}>
+-                {recipe.prepTimeMinutes + recipe.cookTimeMinutes} phút
++                {totalMinutes(recipe)} phút
+               </Text>
+             </View>
+ 
+             <View style={[styles.statCell, styles.statCellBorder]}>
+               <Text style={styles.statKey}>KHẨU PHẦN</Text>
+               <View style={styles.portionControls}>
+-                <Pressable accessibilityLabel="Giảm khẩu phần" onPress={() => setCurrentServings(value => Math.max(1, value - 1))} style={styles.portionButton}><Text style={styles.portionButtonText}>−</Text></Pressable>
++                <Pressable accessibilityLabel="Giảm khẩu phần" disabled={currentServings <= 1} hitSlop={8} onPress={() => setCurrentServings(value => Math.max(1, value - 1))} style={[styles.portionButton, currentServings <= 1 && styles.portionButtonDisabled]}><Text style={styles.portionButtonText}>−</Text></Pressable>
+                 <Text style={styles.statVal}>{currentServings} người</Text>
+-                <Pressable accessibilityLabel="Tăng khẩu phần" onPress={() => setCurrentServings(value => value + 1)} style={styles.portionButton}><Text style={styles.portionButtonText}>+</Text></Pressable>
++                <Pressable accessibilityLabel="Tăng khẩu phần" disabled={currentServings >= MAX_SERVINGS} hitSlop={8} onPress={() => setCurrentServings(value => Math.min(MAX_SERVINGS, value + 1))} style={[styles.portionButton, currentServings >= MAX_SERVINGS && styles.portionButtonDisabled]}><Text style={styles.portionButtonText}>+</Text></Pressable>
+               </View>
+             </View>
+ 
+@@ -131,7 +153,7 @@ export const RecipeDetailModal = ({
+ 
+             {recipe.calories ? <View style={[styles.statCell, styles.statCellBorder]}>
+                 <Text style={styles.statKey}>CALORIES</Text>
+-                <Text style={styles.statVal}>{recipe.calories} kcal</Text>
++                <Text style={styles.statVal}>{recipe.calories} kcal/phần</Text>
+               </View> : null}
+           </View>
+ 
+@@ -143,7 +165,7 @@ export const RecipeDetailModal = ({
+                 <Text style={styles.sectionTitle}>NGUYÊN LIỆU CHUẨN BỊ</Text>
+               </View>
+               <Text style={styles.sectionSubtitle}>
+-                {Object.values(checkedIngredients).filter(Boolean).length}/{recipe.ingredients.length} SẴN SÀNG
++                {readyCount}/{recipe.ingredients.length} ĐÃ CÓ
+               </Text>
+             </View>
+ 
+@@ -159,7 +181,7 @@ export const RecipeDetailModal = ({
+                     </Text>
+                     <View style={styles.amountBadge}>
+                       <Text style={[styles.ingredientAmount, isChecked && styles.ingredientAmountChecked]}>
+-                        {scaleAmount(item.amount, currentServings / Math.max(1, recipe.servings))} {item.unit}
++                        {scaleAmount(item.amount, ratio)} {item.unit}
+                       </Text>
+                     </View>
+                   </Pressable>;
+@@ -167,13 +189,8 @@ export const RecipeDetailModal = ({
+             </View>
+ 
+             {/* Quick Add to Shopping List Button */}
+-            <Pressable onPress={() => {
+-            addToShoppingList(recipe.ingredients.map(item => ({
+-              ...item,
+-              amount: scaleAmount(item.amount, currentServings / Math.max(1, recipe.servings))
+-            })), recipe.title);
+-            Alert.alert('Thành công! 🛒', `Đã thêm ${recipe.ingredients.length} nguyên liệu của món "${recipe.title}" vào Danh sách đi chợ của bạn.`);
+-          }} style={({
++            <Text style={styles.checklistHint}>Đánh dấu ✓ nguyên liệu bạn đã có — phần còn lại sẽ được đưa vào danh sách đi chợ.</Text>
++            <Pressable onPress={handleAddToShopping} style={({
+             pressed
+           }) => [styles.addShoppingListBtn, {
+             transform: [{
+@@ -182,7 +199,7 @@ export const RecipeDetailModal = ({
+           }]}>
+               <Text style={styles.addShoppingListIcon}>🛒</Text>
+               <Text style={styles.addShoppingListText}>
+-                THÊM {recipe.ingredients.length} NGUYÊN LIỆU VÀO DANH SÁCH ĐI CHỢ
++                {missingIngredients.length ? `THÊM ${missingIngredients.length} NGUYÊN LIỆU CÒN THIẾU VÀO DANH SÁCH` : 'ĐÃ ĐỦ NGUYÊN LIỆU ✓'}
+               </Text>
+             </Pressable>
+           </View>
+@@ -274,17 +291,16 @@ export const RecipeDetailModal = ({
+       </View>
+     </Modal>;
+ };
+-const scaleAmount = (amount, ratio) => {
+-  const match = amount.match(/^\s*(\d+(?:\.\d+)?|\d+\/\d+)(.*)$/);
+-  if (!match) return amount;
+-  const value = match[1].includes('/')
+-    ? Number(match[1].split('/')[0]) / Number(match[1].split('/')[1])
+-    : Number(match[1]);
+-  if (!Number.isFinite(value)) return amount;
+-  const scaled = Math.round(value * ratio * 10) / 10;
+-  return `${Number.isInteger(scaled) ? scaled : scaled.toFixed(1)}${match[2]}`;
+-};
+ const styles = StyleSheet.create({
++  portionButtonDisabled: {
++    opacity: 0.35
++  },
++  checklistHint: {
++    fontSize: 12,
++    lineHeight: 17,
++    color: HeronColors.granite,
++    marginTop: 10
++  },
+   container: {
+     flex: 1,
+     backgroundColor: HeronColors.canvas
+diff --git a/src/components/SettingsModal.jsx b/src/components/SettingsModal.jsx
+index 7f6319e..a9fe529 100644
+--- a/src/components/SettingsModal.jsx
++++ b/src/components/SettingsModal.jsx
+@@ -1,14 +1,20 @@
+-import React, { useState } from 'react';
++import React from 'react';
+ import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Switch } from 'react-native';
+ import { AppleColors, Radius, AppleShadow, Spacing } from '../constants/theme';
++import { useRecipes } from '../context/RecipeContext';
+ export const SettingsModal = ({
+   visible,
+   onClose,
+   onReopenOnboarding
+ }) => {
+-  const [keepAwake, setKeepAwake] = useState(true);
+-  const [soundEnabled, setSoundEnabled] = useState(true);
+-  const [vibrationEnabled, setVibrationEnabled] = useState(true);
++  // Persisted in RecipeContext and actually used by Cooking Mode / the timer
++  const { settings, updateSettings } = useRecipes();
++  const keepAwake = settings.keepAwake;
++  const soundEnabled = settings.timerSound;
++  const vibrationEnabled = settings.vibration;
++  const setKeepAwake = value => updateSettings({ keepAwake: value });
++  const setSoundEnabled = value => updateSettings({ timerSound: value });
++  const setVibrationEnabled = value => updateSettings({ vibration: value });
+   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+       <View style={styles.container}>
+         {/* iOS Drag Handle */}
+@@ -58,7 +64,7 @@ export const SettingsModal = ({
+                 <Text style={styles.rowIcon}>🔔</Text>
+                 <View>
+                   <Text style={styles.rowTitle}>Chuông báo Timer</Text>
+-                  <Text style={styles.rowDesc}>Phát chuông khi đếm ngược hoàn tất</Text>
++                  <Text style={styles.rowDesc}>Đọc thông báo bằng giọng nói khi hết giờ</Text>
+                 </View>
+               </View>
+               <Switch value={soundEnabled} onValueChange={setSoundEnabled} trackColor={{
+@@ -72,7 +78,7 @@ export const SettingsModal = ({
+                 <Text style={styles.rowIcon}>📳</Text>
+                 <View>
+                   <Text style={styles.rowTitle}>Rung phản hồi (Haptics)</Text>
+-                  <Text style={styles.rowDesc}>Rung nhẹ khi chạm nút và hết giờ</Text>
++                  <Text style={styles.rowDesc}>Rung khi timer hết giờ (Android/iOS)</Text>
+                 </View>
+               </View>
+               <Switch value={vibrationEnabled} onValueChange={setVibrationEnabled} trackColor={{
+diff --git a/src/components/ShareRecipeModal.jsx b/src/components/ShareRecipeModal.jsx
+index cd9ed27..bf77be6 100644
+--- a/src/components/ShareRecipeModal.jsx
++++ b/src/components/ShareRecipeModal.jsx
+@@ -1,5 +1,5 @@
+ import React, { useMemo, useRef, useState } from 'react';
+-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Share, Alert, Platform } from 'react-native';
++import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Share, Platform } from 'react-native';
+ import QRCode from 'react-native-qrcode-svg';
+ import { captureRef } from 'react-native-view-shot';
+ import * as Sharing from 'expo-sharing';
+@@ -7,6 +7,9 @@ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
+ import { AppleButton } from './ui/AppleButton';
+ import { RecipeStoryCard } from './ui/RecipeStoryCard';
+ import { encodeRecipeForQr } from '../services/recipeQr';
++import { showAlert } from '../utils/dialog';
++// QR version 40 at ECC level L holds 2953 bytes; larger payloads make the QR library throw
++const QR_HARD_LIMIT_BYTES = 2900;
+ const STORY_EXPORT = {
+   width: 1080,
+   height: 1920
+@@ -47,7 +50,7 @@ export const ShareRecipeModal = ({
+         ...STORY_EXPORT
+       });
+       if (!(await Sharing.isAvailableAsync())) {
+-        Alert.alert('Không hỗ trợ chia sẻ', 'Thiết bị này chưa hỗ trợ hộp thoại chia sẻ file.');
++        showAlert('Không hỗ trợ chia sẻ', 'Thiết bị này chưa hỗ trợ hộp thoại chia sẻ file.');
+         return;
+       }
+       await Sharing.shareAsync(uri, {
+@@ -57,7 +60,7 @@ export const ShareRecipeModal = ({
+       });
+     } catch (e) {
+       console.log('Story export error', e);
+-      Alert.alert('Xuất ảnh thất bại', 'Không thể tạo ảnh thẻ công thức. Vui lòng thử lại.');
++      showAlert('Xuất ảnh thất bại', 'Không thể tạo ảnh thẻ công thức. Vui lòng thử lại.');
+     } finally {
+       setIsExporting(false);
+     }
+@@ -134,7 +137,9 @@ export const ShareRecipeModal = ({
+                   {recipe.title}
+                 </Text>
+                 <View style={styles.qrFrame}>
+-                  <QRCode value={qr.payload} size={260} ecl="L" quietZone={8} color={HeronColors.primary} backgroundColor="#FFFFFF" />
++                  {qr.bytes <= QR_HARD_LIMIT_BYTES ? <QRCode value={qr.payload} size={260} ecl="L" quietZone={8} color={HeronColors.primary} backgroundColor="#FFFFFF" /> : <Text style={styles.noticeText}>
++                      Công thức quá dài để tạo mã QR. Hãy dùng nút “Gửi mã dạng văn bản” bên dưới — người nhận dán mã vào mục Quét QR.
++                    </Text>}
+                 </View>
+                 <Text style={styles.qrMeta}>
+                   {recipe.ingredients.length} NGUYÊN LIỆU • {recipe.steps.length} BƯỚC • {(qr.bytes / 1024).toFixed(1)} KB
+@@ -143,7 +148,7 @@ export const ShareRecipeModal = ({
+ 
+               {qr.truncated ? <View style={styles.noticeBox}>
+                   <Text style={styles.noticeText}>
+-                    ✂ Công thức khá dài nên mã QR đã rút gọn bớt mẹo / mô tả chi tiết để điện thoại quét được dễ dàng.
++                    {qr.tooLarge ? '⚠ Mã QR rất dày, một số điện thoại có thể khó quét. ' : ''}✂ Mã QR đã rút gọn bớt video / mẹo / mô tả chi tiết để điện thoại quét được dễ dàng. Ảnh hoặc video chọn từ máy không được gửi kèm.
+                   </Text>
+                 </View> : null}
+ 
+diff --git a/src/components/ShoppingListModal.jsx b/src/components/ShoppingListModal.jsx
+index cfd7e76..f6971b8 100644
+--- a/src/components/ShoppingListModal.jsx
++++ b/src/components/ShoppingListModal.jsx
+@@ -1,8 +1,9 @@
+ import React, { useState } from 'react';
+-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Alert } from 'react-native';
++import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Share, Platform } from 'react-native';
+ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
+ import { useRecipes } from '../context/RecipeContext';
+ import { groupShoppingItemsByAisle } from '../utils/groceryAisles';
++import { confirmAction, showAlert } from '../utils/dialog';
+ export const ShoppingListModal = ({
+   visible,
+   onClose
+@@ -19,25 +20,65 @@ export const ShoppingListModal = ({
+   const [newUnit, setNewUnit] = useState('');
+   const completedCount = shoppingList.filter(item => item.checked).length;
+   const totalCount = shoppingList.length;
+-  const aisleGroups = groupShoppingItemsByAisle(shoppingList);
++  // Items still to buy stay on top of each aisle; bought ones sink to the bottom
++  const aisleGroups = groupShoppingItemsByAisle(shoppingList).map(group => ({
++    ...group,
++    remaining: group.items.filter(item => !item.checked).length,
++    items: [...group.items].sort((a, b) => Number(a.checked) - Number(b.checked))
++  }));
+   const handleAddItem = () => {
+     if (!newName.trim()) {
+-      Alert.alert('Lỗi', 'Vui lòng nhập tên nguyên liệu');
++      showAlert('Thiếu tên nguyên liệu', 'Vui lòng nhập tên nguyên liệu cần mua.');
+       return;
+     }
+-    addCustomShoppingItem(newName, newAmount, newUnit);
++    if (newAmount.trim() && !/^\d+([.,]\d+)?(\/\d+)?$/.test(newAmount.trim())) {
++      showAlert('Số lượng chưa hợp lệ', 'Nhập số lượng dạng số, ví dụ 2, 0,5 hoặc 1/2 — hoặc để trống.');
++      return;
++    }
++    const { merged } = addCustomShoppingItem(newName, newAmount, newUnit);
++    if (merged) showAlert('Đã cộng dồn', `"${newName.trim()}" đã có trong danh sách nên số lượng được cộng thêm.`);
+     setNewName('');
+     setNewAmount('');
+     setNewUnit('');
+   };
+-  const handleShareList = () => {
++  const buildShareText = () => {
++    const lines = ['🛒 DANH SÁCH ĐI CHỢ — CookFlow', ''];
++    aisleGroups.forEach(group => {
++      lines.push(`【${group.label}】`);
++      group.items.forEach(i => lines.push(`${i.checked ? '☑' : '☐'} ${i.name} — ${i.amount} ${i.unit}`.trim()));
++      lines.push('');
++    });
++    lines.push(`Còn cần mua: ${totalCount - completedCount}/${totalCount}`);
++    return lines.join('\n');
++  };
++  const handleShareList = async () => {
+     if (shoppingList.length === 0) {
+-      Alert.alert('Thông báo', 'Danh sách đi chợ đang trống!');
++      showAlert('Thông báo', 'Danh sách đi chợ đang trống!');
+       return;
+     }
+-    const textList = shoppingList.map(i => `${i.checked ? '[x]' : '[ ]'} ${i.name} (${i.amount} ${i.unit}) - ${i.recipeTitle}`).join('\n');
+-    Alert.alert('📋 Danh Sách Đi Chợ CookFlow', textList);
++    const message = buildShareText();
++    try {
++      if (Platform.OS === 'web') {
++        const nav = globalThis.navigator;
++        if (nav?.share) await nav.share({ title: 'Danh sách đi chợ', text: message });
++        else if (nav?.clipboard) {
++          await nav.clipboard.writeText(message);
++          showAlert('Đã sao chép', 'Danh sách đã được sao chép, bạn có thể dán vào tin nhắn.');
++        }
++        return;
++      }
++      await Share.share({ message, title: 'Danh sách đi chợ CookFlow' });
++    } catch {
++      // user dismissed the share sheet
++    }
+   };
++  const handleClearChecked = () => confirmAction({
++    title: 'Xóa các món đã mua?',
++    message: `${completedCount} mục đã đánh dấu sẽ bị xóa khỏi danh sách.`,
++    confirmText: 'Xóa',
++    destructive: true,
++    onConfirm: clearCheckedShoppingItems
++  });
+   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+       <View style={styles.container}>
+         {/* iOS Drag Handle */}
+@@ -72,21 +113,21 @@ export const ShoppingListModal = ({
+           <View style={styles.addInputRow}>
+             <TextInput style={[styles.input, {
+             flex: 2
+-          }]} placeholder="Tên nguyên liệu..." placeholderTextColor={HeronColors.disable} value={newName} onChangeText={setNewName} />
++          }]} placeholder="Tên nguyên liệu..." placeholderTextColor={HeronColors.disable} value={newName} onChangeText={setNewName} returnKeyType="next" maxLength={80} />
+             <TextInput style={[styles.input, {
+             flex: 1
+-          }]} placeholder="Số lượng" placeholderTextColor={HeronColors.disable} value={newAmount} onChangeText={setNewAmount} />
++          }]} placeholder="SL" placeholderTextColor={HeronColors.disable} value={newAmount} onChangeText={setNewAmount} keyboardType="decimal-pad" maxLength={8} />
+             <TextInput style={[styles.input, {
+             flex: 1
+-          }]} placeholder="Đơn vị" placeholderTextColor={HeronColors.disable} value={newUnit} onChangeText={setNewUnit} />
+-            <Pressable onPress={handleAddItem} style={styles.addBtn}>
++          }]} placeholder="Đơn vị" placeholderTextColor={HeronColors.disable} value={newUnit} onChangeText={setNewUnit} returnKeyType="done" onSubmitEditing={handleAddItem} maxLength={20} />
++            <Pressable accessibilityRole="button" accessibilityLabel="Thêm vào danh sách" onPress={handleAddItem} style={styles.addBtn}>
+               <Text style={styles.addBtnText}>+</Text>
+             </Pressable>
+           </View>
+         </View>
+ 
+         {/* Main List */}
+-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
++        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scrollContent}>
+           {shoppingList.length === 0 ? <View style={styles.emptyWrap}>
+               <Text style={styles.emptyIcon}>🧺</Text>
+               <Text style={styles.emptyTitle}>Chưa có nguyên liệu nào</Text>
+@@ -97,7 +138,7 @@ export const ShoppingListModal = ({
+               {aisleGroups.map(group => <View key={group.id} style={styles.aisleGroup}>
+                 <View style={styles.aisleHeading}>
+                   <Text style={styles.aisleTitle}>{group.label}</Text>
+-                  <Text style={styles.aisleCount}>{group.items.length}</Text>
++                  <Text style={styles.aisleCount}>{group.remaining}/{group.items.length}</Text>
+                 </View>
+                 {group.items.map(item => <Pressable key={item.id} accessibilityRole="checkbox" accessibilityState={{ checked: item.checked }} onPress={() => toggleShoppingItem(item.id)} style={[styles.itemCard, item.checked && styles.itemCardChecked]}>
+                   <View style={styles.checkbox}>
+@@ -129,7 +170,7 @@ export const ShoppingListModal = ({
+                 <Text style={styles.shareBtnText}>📋 Xuất / Gửi danh sách</Text>
+               </Pressable>
+ 
+-              {completedCount > 0 ? <Pressable onPress={clearCheckedShoppingItems} style={styles.clearBtn}>
++              {completedCount > 0 ? <Pressable onPress={handleClearChecked} style={styles.clearBtn}>
+                   <Text style={styles.clearBtnText}>🧹 Xóa món đã mua</Text>
+                 </Pressable> : null}
+             </View> : null}
+diff --git a/src/components/ui/FloatingTimerWidget.jsx b/src/components/ui/FloatingTimerWidget.jsx
+index 819e759..a9bb0d7 100644
+--- a/src/components/ui/FloatingTimerWidget.jsx
++++ b/src/components/ui/FloatingTimerWidget.jsx
+@@ -1,25 +1,44 @@
+ import React from 'react';
+-import { Pressable, StyleSheet, Text } from 'react-native';
++import { Pressable, StyleSheet, Text, View } from 'react-native';
+ import { useRecipes } from '../../context/RecipeContext';
+ import { HeronColors } from '../../constants/theme';
++import { formatTimer } from './TimerCircle';
+ 
+-export const FloatingTimerWidget = ({ onPress }) => {
+-  const { cookingTimer } = useRecipes();
+-  if (!cookingTimer?.running) return null;
+-
+-  const minutes = Math.floor(cookingTimer.secondsLeft / 60).toString().padStart(2, '0');
+-  const seconds = (cookingTimer.secondsLeft % 60).toString().padStart(2, '0');
++// Shown above the bottom dock while a step timer exists (running, paused or just finished),
++// so a paused timer is never "lost" and a finished one can be acknowledged.
++export const FloatingTimerWidget = ({ onPress, bottomOffset = 100 }) => {
++  const { cookingTimer, timerSecondsLeft, clearTimer } = useRecipes();
++  if (!cookingTimer) return null;
++  const { status } = cookingTimer;
++  const label = status === 'done' ? '✓ Hết giờ' : `${status === 'paused' ? '⏸' : '⏱'} ${formatTimer(timerSecondsLeft)}`;
+ 
+   return (
+-    <Pressable accessibilityRole="button" accessibilityLabel={`Mở lại timer ${minutes}:${seconds}`} onPress={onPress} style={styles.pill}>
+-      <Text style={styles.time}>⏱ {minutes}:{seconds}</Text>
+-      <Text style={styles.step} numberOfLines={1}>• {cookingTimer.stepTitle || cookingTimer.recipeTitle}</Text>
+-    </Pressable>
++    <View pointerEvents="box-none" style={[styles.wrap, { bottom: bottomOffset }]}>
++      <View style={[styles.pill, status === 'done' && styles.pillDone]}>
++        <Pressable
++          accessibilityRole="button"
++          accessibilityLabel={`Mở lại bước nấu ${cookingTimer.stepTitle}, ${label}`}
++          onPress={onPress}
++          style={styles.main}
++        >
++          <Text style={styles.time}>{label}</Text>
++          <Text style={styles.step} numberOfLines={1}>• {cookingTimer.stepTitle || cookingTimer.recipeTitle}</Text>
++        </Pressable>
++        {status !== 'running' ? <Pressable accessibilityRole="button" accessibilityLabel="Tắt timer" hitSlop={8} onPress={clearTimer} style={styles.close}>
++          <Text style={styles.closeText}>✕</Text>
++        </Pressable> : null}
++      </View>
++    </View>
+   );
+ };
+ 
+ const styles = StyleSheet.create({
+-  pill: { position: 'absolute', bottom: 24, alignSelf: 'center', maxWidth: '92%', backgroundColor: HeronColors.primary, borderRadius: 28, paddingHorizontal: 18, paddingVertical: 12, flexDirection: 'row', gap: 8, alignItems: 'center', elevation: 8 },
++  wrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
++  pill: { maxWidth: '92%', backgroundColor: HeronColors.primary, borderRadius: 28, flexDirection: 'row', alignItems: 'center', elevation: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
++  pillDone: { backgroundColor: HeronColors.emerald },
++  main: { minHeight: 44, paddingLeft: 18, paddingRight: 14, paddingVertical: 10, flexDirection: 'row', gap: 8, alignItems: 'center', flexShrink: 1 },
+   time: { color: '#FFFFFF', fontWeight: '800', fontVariant: ['tabular-nums'] },
+-  step: { color: '#FFFFFF', maxWidth: 180 },
++  step: { color: '#FFFFFF', maxWidth: 180, flexShrink: 1 },
++  close: { width: 40, height: 44, alignItems: 'center', justifyContent: 'center', borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.25)' },
++  closeText: { color: '#FFFFFF', fontWeight: '800' }
+ });
+diff --git a/src/components/ui/TimerCircle.jsx b/src/components/ui/TimerCircle.jsx
+index 22a76f5..54eb373 100644
+--- a/src/components/ui/TimerCircle.jsx
++++ b/src/components/ui/TimerCircle.jsx
+@@ -1,75 +1,76 @@
+-import React, { useState, useEffect } from 'react';
++import React from 'react';
+ import { View, Text, StyleSheet, Pressable } from 'react-native';
+ import { HeronColors, Radius, HeronShadow } from '../../constants/theme';
+ import { useRecipes } from '../../context/RecipeContext';
++import { confirmAction } from '../../utils/dialog';
++
++export const formatTimer = totalSeconds => {
++  const safe = Math.max(0, Math.round(totalSeconds || 0));
++  const hours = Math.floor(safe / 3600);
++  const mins = Math.floor((safe % 3600) / 60);
++  const secs = safe % 60;
++  const mmss = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
++  return hours > 0 ? `${hours}:${mmss}` : mmss;
++};
++
++/**
++ * Countdown for one recipe step. The single app-wide timer lives in RecipeContext;
++ * this component only shows it when it belongs to this step, so moving between steps
++ * never resets or hijacks a timer that is still running for another step.
++ */
+ export const TimerCircle = ({
+-  initialSeconds,
+-  onFinish,
+-  autoStart = false,
+-  stepTitle = ''
++  recipe,
++  stepIndex,
++  defaultSeconds
+ }) => {
+-  const { cookingTimer, setCookingTimer, activeRecipeForCooking } = useRecipes();
+-  const [isCompleted, setIsCompleted] = useState(false);
+-  const secondsLeft = cookingTimer?.secondsLeft ?? initialSeconds;
+-  const isRunning = cookingTimer?.running ?? false;
+-  useEffect(() => {
+-    const sameTimerSession = cookingTimer?.recipeId === activeRecipeForCooking?.id
+-      && cookingTimer?.stepTitle === stepTitle;
+-    if (!sameTimerSession) {
+-      setCookingTimer({ recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: autoStart, initialSeconds });
+-    }
+-    setIsCompleted(false);
+-  }, [initialSeconds, activeRecipeForCooking?.id, stepTitle]);
+-  useEffect(() => {
+-    if (secondsLeft === 0 && cookingTimer?.recipeId === activeRecipeForCooking?.id) {
+-      setIsCompleted(true);
+-      if (onFinish) onFinish();
+-    }
+-  }, [secondsLeft]);
+-  const toggleRunning = () => {
+-    if (isCompleted) {
+-      setCookingTimer({ recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: true, initialSeconds });
+-      setIsCompleted(false);
+-      return;
++  const { cookingTimer, timerSecondsLeft, startStepTimer, pauseTimer, resumeTimer, addTimerMinute, clearTimer } = useRecipes();
++  const isOwn = !!cookingTimer && cookingTimer.recipeId === recipe?.id && cookingTimer.stepIndex === stepIndex;
++  const status = isOwn ? cookingTimer.status : 'idle';
++  const isRunning = status === 'running';
++  const isCompleted = status === 'done';
++  const secondsLeft = isOwn ? timerSecondsLeft : defaultSeconds;
++  const otherActive = !isOwn && cookingTimer && cookingTimer.status !== 'done' ? cookingTimer : null;
++
++  const start = () => startStepTimer({ recipe, stepIndex, seconds: defaultSeconds });
++  const handleMain = () => {
++    if (isRunning) return pauseTimer();
++    if (status === 'paused') return resumeTimer();
++    if (otherActive) {
++      return confirmAction({
++        title: 'Thay timer đang chạy?',
++        message: `Timer "${otherActive.stepTitle}" (${otherActive.recipeTitle}) còn ${formatTimer(timerSecondsLeft)}. Bắt đầu timer bước này sẽ dừng timer kia.`,
++        confirmText: 'Bắt đầu bước này',
++        cancelText: 'Giữ timer cũ',
++        onConfirm: start
++      });
+     }
+-    setCookingTimer(timer => timer ? { ...timer, running: !timer.running } : { recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: true, initialSeconds });
+-  };
+-  const resetTimer = () => {
+-    setCookingTimer({ recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: false, initialSeconds });
+-    setIsCompleted(false);
++    return start();
+   };
+-  const addOneMinute = () => {
+-    setCookingTimer(timer => timer ? { ...timer, secondsLeft: timer.secondsLeft + 60, initialSeconds: timer.initialSeconds + 60 } : timer);
+-    setIsCompleted(false);
+-  };
+-  const formatTime = totalSeconds => {
+-    const mins = Math.floor(totalSeconds / 60);
+-    const secs = totalSeconds % 60;
+-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
++  const handleReset = () => {
++    if (isOwn) clearTimer();
+   };
++
+   return <View style={styles.container}>
+-      {/* Vòng Timer tối giản phong cách Heron AI */}
+       <View style={[styles.circleOuter, isCompleted ? styles.circleCompleted : isRunning ? styles.circleRunning : styles.circleIdle]}>
+         <View style={styles.badgeState}>
+           <Text style={[styles.badgeStateText, isRunning && styles.badgeStateActive]}>
+-            {isCompleted ? '✓ HOÀN TẤT' : isRunning ? '● ĐANG NẤU' : 'CHỜ KÍCH HOẠT'}
++            {isCompleted ? '✓ HOÀN TẤT' : isRunning ? '● ĐANG NẤU' : status === 'paused' ? 'TẠM DỪNG' : 'CHỜ KÍCH HOẠT'}
+           </Text>
+         </View>
+ 
+-        <Text style={[styles.timeText, isCompleted && styles.timeCompletedText]}>
+-          {formatTime(secondsLeft)}
++        <Text style={[styles.timeText, isCompleted && styles.timeCompletedText]} accessibilityLiveRegion="polite">
++          {formatTimer(secondsLeft)}
+         </Text>
+ 
+         <Text style={styles.subtext}>
+-          {isCompleted ? 'Đã kết thúc giai đoạn này' : isRunning ? 'Đang đếm ngược chính xác' : 'Nhấn Bắt đầu khi sẵn sàng'}
++          {isCompleted ? 'Đã kết thúc giai đoạn này' : isRunning ? 'Vẫn đếm khi bạn rời màn hình' : status === 'paused' ? 'Nhấn Tiếp tục để chạy tiếp' : 'Nhấn Bắt đầu khi sẵn sàng'}
+         </Text>
+       </View>
+ 
+-      {/* Điều khiển dạng Pill kiểu Heron AI */}
+       <View style={styles.controlsRow}>
+-        <Pressable onPress={resetTimer} style={({
++        <Pressable accessibilityRole="button" disabled={!isOwn} onPress={handleReset} style={({
+         pressed
+-      }) => [styles.controlBtn, styles.btnOutline, {
++      }) => [styles.controlBtn, styles.btnOutline, !isOwn && styles.controlDisabled, {
+         transform: [{
+           scale: pressed ? 0.96 : 1
+         }]
+@@ -77,7 +78,7 @@ export const TimerCircle = ({
+           <Text style={styles.btnOutlineText}>Đặt lại</Text>
+         </Pressable>
+ 
+-        <Pressable onPress={toggleRunning} style={({
++        <Pressable accessibilityRole="button" onPress={isCompleted ? start : handleMain} style={({
+         pressed
+       }) => [styles.controlBtn, styles.mainBtn, isCompleted ? styles.mainBtnRestart : isRunning ? styles.mainBtnPause : styles.mainBtnStart, {
+         transform: [{
+@@ -85,13 +86,13 @@ export const TimerCircle = ({
+         }]
+       }]}>
+           <Text style={styles.mainBtnText}>
+-            {isCompleted ? 'Lặp lại' : isRunning ? 'Tạm dừng' : 'Bắt đầu'}
++            {isCompleted ? 'Lặp lại' : isRunning ? 'Tạm dừng' : status === 'paused' ? 'Tiếp tục' : 'Bắt đầu'}
+           </Text>
+         </Pressable>
+ 
+-        <Pressable onPress={addOneMinute} style={({
++        <Pressable accessibilityRole="button" disabled={!isOwn} onPress={addTimerMinute} style={({
+         pressed
+-      }) => [styles.controlBtn, styles.btnOutline, {
++      }) => [styles.controlBtn, styles.btnOutline, !isOwn && styles.controlDisabled, {
+         transform: [{
+           scale: pressed ? 0.96 : 1
+         }]
+@@ -99,6 +100,10 @@ export const TimerCircle = ({
+           <Text style={styles.btnOutlineText}>+1 Phút</Text>
+         </Pressable>
+       </View>
++
++      {otherActive ? <Text style={styles.notice}>
++          Đang có timer khác: "{otherActive.stepTitle}" • {formatTimer(timerSecondsLeft)}
++        </Text> : null}
+     </View>;
+ };
+ const styles = StyleSheet.create({
+@@ -163,13 +168,27 @@ const styles = StyleSheet.create({
+   },
+   controlsRow: {
+     flexDirection: 'row',
++    flexWrap: 'wrap',
++    justifyContent: 'center',
+     alignItems: 'center',
+-    gap: 12,
++    gap: 10,
+     marginTop: 20
+   },
++  controlDisabled: {
++    opacity: 0.4
++  },
++  notice: {
++    marginTop: 12,
++    maxWidth: 300,
++    fontSize: 12,
++    lineHeight: 17,
++    color: HeronColors.granite,
++    textAlign: 'center'
++  },
+   controlBtn: {
++    minHeight: 44,
+     paddingVertical: 11,
+-    paddingHorizontal: 20,
++    paddingHorizontal: 16,
+     borderRadius: Radius.full,
+     alignItems: 'center',
+     justifyContent: 'center'
+@@ -186,7 +205,7 @@ const styles = StyleSheet.create({
+     color: HeronColors.primary
+   },
+   mainBtn: {
+-    minWidth: 115,
++    minWidth: 110,
+     ...HeronShadow.brandGlow
+   },
+   mainBtnStart: {
+diff --git a/src/context/RecipeContext.jsx b/src/context/RecipeContext.jsx
+index 84431be..88191da 100644
+--- a/src/context/RecipeContext.jsx
++++ b/src/context/RecipeContext.jsx
+@@ -1,13 +1,23 @@
+-import React, { createContext, useContext, useState, useEffect } from 'react';
+-import { Platform } from 'react-native';
++import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
++import { AppState, Platform, Vibration } from 'react-native';
++import * as Speech from 'expo-speech';
+ import { INITIAL_RECIPES } from '../data/mockRecipes';
++import { makeId, normalizeRecipe, recipeSignature } from '../utils/recipeModel';
++import { normalizeVi } from '../utils/text';
++import { addAmounts } from '../utils/quantity';
++import { showAlert } from '../utils/dialog';
++
+ const STORAGE_KEY_RECIPES = '@cookflow_recipes_v2';
+ const STORAGE_KEY_FAVS = '@cookflow_favs_v2';
+ const STORAGE_KEY_SHOPPING = '@cookflow_shopping_v2';
+ const STORAGE_KEY_PANTRY = '@cookflow_pantry_v1';
+ const STORAGE_KEY_ONBOARDING = '@cookflow_onboarding_v2';
++const STORAGE_KEY_SETTINGS = '@cookflow_settings_v1';
++const STORAGE_KEY_TIMER = '@cookflow_timer_v1';
+ const RecipeContext = createContext(undefined);
+ 
++export const DEFAULT_SETTINGS = { keepAwake: true, timerSound: true, vibration: true };
++
+ // Safe storage helper
+ export const safeStorage = {
+   getItem: async key => {
+@@ -46,185 +56,301 @@ export const safeStorage = {
+     }
+   }
+ };
++
++const parseJson = raw => {
++  if (!raw) return null;
++  try {
++    return JSON.parse(raw);
++  } catch {
++    return null;
++  }
++};
++
++const DEFAULT_SHOPPING = [{
++  id: 'shop_01',
++  name: 'Thịt bò phi lê',
++  amount: '300',
++  unit: 'g',
++  recipeTitle: 'Bò Lúc Lắc Sốt Tiêu',
++  checked: false
++}, {
++  id: 'shop_02',
++  name: 'Ớt chuông đà lạt',
++  amount: '2',
++  unit: 'quả',
++  recipeTitle: 'Bò Lúc Lắc Sốt Tiêu',
++  checked: true
++}];
++
++const appendSource = (current, title) => {
++  const sources = String(current || '').split(', ').filter(Boolean);
++  return sources.includes(title) ? current : [...sources, title].join(', ');
++};
++
++/**
++ * Timer model (one active timer per app, tied to a recipe step):
++ * { recipeId, recipeTitle, stepIndex, stepTitle, durationSeconds, status: 'running'|'paused'|'done',
++ *   endAt (epoch ms, while running), remainingSeconds (while paused/done) }
++ * Remaining time is derived from the wall clock, so it stays correct after the JS thread
++ * is paused in background, after a browser tab is throttled, or after an app restart.
++ */
++export const getTimerRemaining = (timer, now = Date.now()) => {
++  if (!timer) return 0;
++  if (timer.status === 'running') return Math.max(0, Math.ceil((timer.endAt - now) / 1000));
++  return Math.max(0, timer.remainingSeconds ?? 0);
++};
++
++const usePersist = (isHydrated, key, value) => {
++  useEffect(() => {
++    if (!isHydrated) return;
++    if (value == null) safeStorage.removeItem(key);
++    else safeStorage.setItem(key, JSON.stringify(value));
++  }, [isHydrated, key, value]);
++};
++
+ export const RecipeProvider = ({
+   children
+ }) => {
++  const [isHydrated, setIsHydrated] = useState(false);
+   const [cookingTimer, setCookingTimer] = useState(null);
+-  const [recipes, setRecipes] = useState(INITIAL_RECIPES);
++  const [now, setNow] = useState(Date.now());
++  const [recipes, setRecipes] = useState(() => INITIAL_RECIPES.map(normalizeRecipe));
+   const [favoriteIds, setFavoriteIds] = useState(['rec_01', 'rec_03']);
+   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
+   const [searchQuery, setSearchQuery] = useState('');
+   const [activeRecipeForCooking, setActiveRecipeForCooking] = useState(null);
+   const [pantryIngredients, setPantryIngredients] = useState([]);
+-
+-  // Shopping list state
+-  const [shoppingList, setShoppingList] = useState([{
+-    id: 'shop_01',
+-    name: 'Thịt bò phi lê',
+-    amount: '300',
+-    unit: 'g',
+-    recipeTitle: 'Bò Lúc Lắc Sốt Tiêu',
+-    checked: false
+-  }, {
+-    id: 'shop_02',
+-    name: 'Ớt chuông đà lạt',
+-    amount: '2',
+-    unit: 'quả',
+-    recipeTitle: 'Bò Lúc Lắc Sốt Tiêu',
+-    checked: true
+-  }]);
+-
+-  // Onboarding status state
++  const [shoppingList, setShoppingList] = useState(DEFAULT_SHOPPING);
++  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
+-  useEffect(() => {
+-    loadPersistedData();
+-  }, []);
++  const settingsRef = useRef(settings);
++  settingsRef.current = settings;
++  // Latest list for synchronous merges (two adds in the same tick must not drop items)
++  const shoppingRef = useRef(shoppingList);
++  shoppingRef.current = shoppingList;
+ 
++  // ---------- Load persisted data once ----------
+   useEffect(() => {
+-    if (!cookingTimer?.running) return;
+-    const interval = setInterval(() => setCookingTimer(timer => timer && timer.running
+-      ? { ...timer, secondsLeft: Math.max(0, timer.secondsLeft - 1), running: timer.secondsLeft > 1 }
+-      : timer), 1000);
+-    return () => clearInterval(interval);
+-  }, [cookingTimer?.running]);
+-  const loadPersistedData = async () => {
+-    try {
+-      const storedRecipes = await safeStorage.getItem(STORAGE_KEY_RECIPES);
+-      const storedFavs = await safeStorage.getItem(STORAGE_KEY_FAVS);
+-      const storedShopping = await safeStorage.getItem(STORAGE_KEY_SHOPPING);
+-      const storedPantry = await safeStorage.getItem(STORAGE_KEY_PANTRY);
+-      const storedOnboarding = await safeStorage.getItem(STORAGE_KEY_ONBOARDING);
+-      if (storedRecipes) {
+-        const parsed = JSON.parse(storedRecipes);
+-        if (Array.isArray(parsed) && parsed.length > 0) {
+-          setRecipes(parsed);
+-        }
+-      } else {
+-        await safeStorage.setItem(STORAGE_KEY_RECIPES, JSON.stringify(INITIAL_RECIPES));
+-      }
+-      if (storedFavs) {
+-        const parsedFavs = JSON.parse(storedFavs);
+-        if (Array.isArray(parsedFavs)) {
+-          setFavoriteIds(parsedFavs);
+-        }
+-      }
+-      if (storedShopping) {
+-        const parsedShopping = JSON.parse(storedShopping);
+-        if (Array.isArray(parsedShopping)) {
+-          setShoppingList(parsedShopping);
+-        }
++    let cancelled = false;
++    (async () => {
++      const [rawRecipes, rawFavs, rawShopping, rawPantry, rawOnboarding, rawSettings, rawTimer] = await Promise.all([
++        STORAGE_KEY_RECIPES, STORAGE_KEY_FAVS, STORAGE_KEY_SHOPPING, STORAGE_KEY_PANTRY,
++        STORAGE_KEY_ONBOARDING, STORAGE_KEY_SETTINGS, STORAGE_KEY_TIMER
++      ].map(key => safeStorage.getItem(key)));
++      if (cancelled) return;
++
++      const storedRecipes = parseJson(rawRecipes);
++      if (Array.isArray(storedRecipes)) {
++        const normalized = storedRecipes.map(normalizeRecipe).filter(Boolean);
++        // Built-in recipes added in a newer app version are appended for existing users
++        const knownIds = new Set(normalized.map(r => r.id));
++        const newSamples = INITIAL_RECIPES.filter(r => !knownIds.has(r.id)).map(normalizeRecipe);
++        setRecipes([...normalized, ...newSamples]);
+       }
+-      if (storedPantry) {
+-        const parsedPantry = JSON.parse(storedPantry);
+-        if (Array.isArray(parsedPantry)) {
+-          setPantryIngredients(parsedPantry.filter(item => typeof item === 'string'));
+-        }
++      const storedFavs = parseJson(rawFavs);
++      if (Array.isArray(storedFavs)) setFavoriteIds(storedFavs.filter(id => typeof id === 'string'));
++      const storedShopping = parseJson(rawShopping);
++      if (Array.isArray(storedShopping)) {
++        setShoppingList(storedShopping.filter(item => item && typeof item.name === 'string').map(item => ({ ...item, id: item.id || makeId('shop') })));
+       }
+-      if (storedOnboarding === 'true') {
+-        setHasSeenOnboarding(true);
+-      } else {
+-        setHasSeenOnboarding(false);
++      const storedPantry = parseJson(rawPantry);
++      if (Array.isArray(storedPantry)) setPantryIngredients(storedPantry.filter(item => typeof item === 'string'));
++      const storedSettings = parseJson(rawSettings);
++      if (storedSettings && typeof storedSettings === 'object') setSettings({ ...DEFAULT_SETTINGS, ...storedSettings });
++      const storedTimer = parseJson(rawTimer);
++      if (storedTimer?.recipeId && ['running', 'paused', 'done'].includes(storedTimer.status)) {
++        // A timer that ran out while the app was closed is restored as finished
++        setCookingTimer(storedTimer.status === 'running' && storedTimer.endAt <= Date.now()
++          ? { ...storedTimer, status: 'done', remainingSeconds: 0, endAt: undefined, notified: true }
++          : storedTimer);
+       }
+-    } catch (e) {
+-      console.log('Using default state');
++      setHasSeenOnboarding(rawOnboarding === 'true');
++      setIsHydrated(true);
++    })();
++    return () => {
++      cancelled = true;
++    };
++  }, []);
++
++  // ---------- Persist after hydration (never overwrite stored data with defaults) ----------
++  usePersist(isHydrated, STORAGE_KEY_RECIPES, recipes);
++  usePersist(isHydrated, STORAGE_KEY_FAVS, favoriteIds);
++  usePersist(isHydrated, STORAGE_KEY_SHOPPING, shoppingList);
++  usePersist(isHydrated, STORAGE_KEY_PANTRY, pantryIngredients);
++  usePersist(isHydrated, STORAGE_KEY_SETTINGS, settings);
++  usePersist(isHydrated, STORAGE_KEY_TIMER, cookingTimer);
++
++  // ---------- Timer clock ----------
++  const isTimerRunning = cookingTimer?.status === 'running';
++  useEffect(() => {
++    if (!isTimerRunning) return undefined;
++    setNow(Date.now());
++    const interval = setInterval(() => setNow(Date.now()), 500);
++    const sub = AppState.addEventListener?.('change', state => {
++      if (state === 'active') setNow(Date.now());
++    });
++    return () => {
++      clearInterval(interval);
++      sub?.remove?.();
++    };
++  }, [isTimerRunning]);
++
++  // Finish detection lives here (not in TimerCircle) so it fires even when Cooking Mode is closed
++  useEffect(() => {
++    if (!cookingTimer || cookingTimer.status !== 'running' || now < cookingTimer.endAt) return;
++    const finished = cookingTimer;
++    setCookingTimer(timer => timer && timer.status === 'running'
++      ? { ...timer, status: 'done', remainingSeconds: 0, endAt: undefined, notified: true }
++      : timer);
++    const { vibration, timerSound } = settingsRef.current;
++    if (vibration && Platform.OS !== 'web') Vibration.vibrate([0, 500, 300, 500]);
++    if (timerSound) {
++      Speech.stop();
++      Speech.speak(`Hết giờ bước ${finished.stepIndex + 1}: ${finished.stepTitle}`, { language: 'vi-VN' });
+     }
+-  };
++    showAlert('⏰ ĐÃ HẾT GIỜ!', `${finished.recipeTitle}\nBước ${finished.stepIndex + 1}: ${finished.stepTitle}`);
++  }, [now, cookingTimer]);
++
++  const startStepTimer = useCallback(({ recipe, stepIndex, seconds }) => {
++    const step = recipe?.steps?.[stepIndex];
++    const duration = Math.max(1, Math.round(seconds || step?.timerSeconds || 0));
++    if (!recipe || !step || !duration) return;
++    setNow(Date.now());
++    setCookingTimer({
++      recipeId: recipe.id,
++      recipeTitle: recipe.title,
++      stepIndex,
++      stepTitle: step.title,
++      durationSeconds: duration,
++      status: 'running',
++      endAt: Date.now() + duration * 1000
++    });
++  }, []);
++  const pauseTimer = useCallback(() => {
++    setCookingTimer(timer => timer?.status === 'running'
++      ? { ...timer, status: 'paused', remainingSeconds: getTimerRemaining(timer), endAt: undefined }
++      : timer);
++  }, []);
++  const resumeTimer = useCallback(() => {
++    setNow(Date.now());
++    setCookingTimer(timer => timer?.status === 'paused' && timer.remainingSeconds > 0
++      ? { ...timer, status: 'running', endAt: Date.now() + timer.remainingSeconds * 1000, remainingSeconds: undefined }
++      : timer);
++  }, []);
++  const addTimerMinute = useCallback(() => {
++    setNow(Date.now());
++    setCookingTimer(timer => {
++      if (!timer) return timer;
++      if (timer.status === 'running') return { ...timer, endAt: timer.endAt + 60000, durationSeconds: timer.durationSeconds + 60 };
++      if (timer.status === 'done') {
++        return { ...timer, status: 'running', endAt: Date.now() + 60000, remainingSeconds: undefined, durationSeconds: 60, notified: false };
++      }
++      return { ...timer, remainingSeconds: timer.remainingSeconds + 60, durationSeconds: timer.durationSeconds + 60 };
++    });
++  }, []);
++  const clearTimer = useCallback(() => setCookingTimer(null), []);
++
++  // ---------- Recipes ----------
+   const addRecipe = newRecipeData => {
+-    const newRecipe = {
++    const newRecipe = normalizeRecipe({
+       ...newRecipeData,
+-      id: `custom_${Date.now()}`,
++      id: makeId('custom'),
+       isCustom: true,
+       createdAt: new Date().toISOString(),
+       colorAccent: newRecipeData.colorAccent || '#FF6B6B'
+-    };
+-    const updated = [newRecipe, ...recipes];
+-    setRecipes(updated);
+-    safeStorage.setItem(STORAGE_KEY_RECIPES, JSON.stringify(updated));
++    });
++    if (!newRecipe) return null;
++    setRecipes(prev => [newRecipe, ...prev]);
+     return newRecipe;
+   };
+   const updateRecipe = updatedRecipe => {
+-    const updated = recipes.map(r => r.id === updatedRecipe.id ? updatedRecipe : r);
+-    setRecipes(updated);
+-    safeStorage.setItem(STORAGE_KEY_RECIPES, JSON.stringify(updated));
++    const normalized = normalizeRecipe({ ...updatedRecipe, updatedAt: new Date().toISOString() });
++    if (!normalized) return;
++    setRecipes(prev => prev.map(r => r.id === normalized.id ? normalized : r));
++    // Keep an open cooking session in sync with the edited content
++    setActiveRecipeForCooking(active => active?.id === normalized.id ? normalized : active);
++    setCookingTimer(timer => {
++      if (timer?.recipeId !== normalized.id) return timer;
++      const step = normalized.steps[timer.stepIndex];
++      return step ? { ...timer, recipeTitle: normalized.title, stepTitle: step.title } : null;
++    });
+   };
+   const deleteRecipe = id => {
+-    const updated = recipes.filter(r => r.id !== id);
+-    setRecipes(updated);
+-    safeStorage.setItem(STORAGE_KEY_RECIPES, JSON.stringify(updated));
++    setRecipes(prev => prev.filter(r => r.id !== id));
++    setFavoriteIds(prev => prev.filter(fId => fId !== id));
++    setActiveRecipeForCooking(active => active?.id === id ? null : active);
++    setCookingTimer(timer => timer?.recipeId === id ? null : timer);
++  };
++  const findDuplicateRecipe = candidate => {
++    const signature = recipeSignature(candidate);
++    return recipes.find(r => recipeSignature(r) === signature) || null;
+   };
+   const toggleFavorite = id => {
+-    let updated;
+-    if (favoriteIds.includes(id)) {
+-      updated = favoriteIds.filter(fId => fId !== id);
+-    } else {
+-      updated = [...favoriteIds, id];
+-    }
+-    setFavoriteIds(updated);
+-    safeStorage.setItem(STORAGE_KEY_FAVS, JSON.stringify(updated));
++    setFavoriteIds(prev => prev.includes(id) ? prev.filter(fId => fId !== id) : [...prev, id]);
+   };
+   const isFavorite = id => favoriteIds.includes(id);
+   const getRecipeById = id => recipes.find(r => r.id === id);
+ 
++  // ---------- Pantry ----------
+   const togglePantryIngredient = ingredientName => {
+-    const updated = pantryIngredients.includes(ingredientName)
+-      ? pantryIngredients.filter(name => name !== ingredientName)
+-      : [...pantryIngredients, ingredientName];
+-    setPantryIngredients(updated);
+-    safeStorage.setItem(STORAGE_KEY_PANTRY, JSON.stringify(updated));
+-  };
+-  const clearPantry = () => {
+-    setPantryIngredients([]);
+-    safeStorage.setItem(STORAGE_KEY_PANTRY, JSON.stringify([]));
++    const key = normalizeVi(ingredientName);
++    if (!key) return;
++    setPantryIngredients(prev => prev.some(name => normalizeVi(name) === key)
++      ? prev.filter(name => normalizeVi(name) !== key)
++      : [...prev, ingredientName.trim()]);
+   };
++  const clearPantry = () => setPantryIngredients([]);
+ 
+-  // Shopping List methods
++  // ---------- Shopping list ----------
++  /**
++   * Adds ingredients, merging with unchecked rows of the same name + unit instead of duplicating.
++   * @returns {{ added: number, merged: number }}
++   */
+   const addToShoppingList = (ingredients, recipeTitle) => {
+-    const newItems = ingredients.map(ing => ({
+-      id: `shop_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+-      name: ing.name,
+-      amount: ing.amount,
+-      unit: ing.unit,
+-      recipeTitle: recipeTitle || 'Công thức CookFlow',
+-      checked: false
+-    }));
+-    const updated = [...newItems, ...shoppingList];
+-    setShoppingList(updated);
+-    safeStorage.setItem(STORAGE_KEY_SHOPPING, JSON.stringify(updated));
++    const source = recipeTitle || 'Công thức CookFlow';
++    const result = { added: 0, merged: 0 };
++    const list = [...shoppingRef.current];
++    (ingredients || []).forEach(ing => {
++      const name = String(ing?.name ?? '').trim();
++      if (!name) return;
++      const amount = String(ing.amount ?? '').trim() || 'Vừa đủ';
++      const unit = String(ing.unit ?? '').trim();
++      const idx = list.findIndex(item => !item.checked
++        && normalizeVi(item.name) === normalizeVi(name)
++        && normalizeVi(item.unit) === normalizeVi(unit));
++      if (idx >= 0) {
++        const existing = list[idx];
++        const summed = addAmounts(existing.amount, amount);
++        const sameText = normalizeVi(existing.amount) === normalizeVi(amount);
++        if (summed !== null || sameText) {
++          list[idx] = { ...existing, amount: summed ?? existing.amount, recipeTitle: appendSource(existing.recipeTitle, source) };
++          result.merged += 1;
++          return;
++        }
++      }
++      list.unshift({ id: makeId('shop'), name, amount, unit, recipeTitle: source, checked: false });
++      result.added += 1;
++    });
++    shoppingRef.current = list;
++    setShoppingList(list);
++    return result;
+   };
+   const toggleShoppingItem = id => {
+-    const updated = shoppingList.map(item => item.id === id ? {
+-      ...item,
+-      checked: !item.checked
+-    } : item);
+-    setShoppingList(updated);
+-    safeStorage.setItem(STORAGE_KEY_SHOPPING, JSON.stringify(updated));
++    setShoppingList(prev => prev.map(item => item.id === id ? { ...item, checked: !item.checked } : item));
+   };
+   const deleteShoppingItem = id => {
+-    const updated = shoppingList.filter(item => item.id !== id);
+-    setShoppingList(updated);
+-    safeStorage.setItem(STORAGE_KEY_SHOPPING, JSON.stringify(updated));
++    setShoppingList(prev => prev.filter(item => item.id !== id));
+   };
+   const clearCheckedShoppingItems = () => {
+-    const updated = shoppingList.filter(item => !item.checked);
+-    setShoppingList(updated);
+-    safeStorage.setItem(STORAGE_KEY_SHOPPING, JSON.stringify(updated));
++    setShoppingList(prev => prev.filter(item => !item.checked));
+   };
+   const addCustomShoppingItem = (name, amount, unit) => {
+-    if (!name.trim()) return;
+-    const newItem = {
+-      id: `shop_${Date.now()}`,
+-      name: name.trim(),
+-      amount: amount.trim() || '1',
+-      unit: unit.trim() || 'phần',
+-      recipeTitle: 'Mua tự do',
+-      checked: false
+-    };
+-    const updated = [newItem, ...shoppingList];
+-    setShoppingList(updated);
+-    safeStorage.setItem(STORAGE_KEY_SHOPPING, JSON.stringify(updated));
++    if (!String(name || '').trim()) return { added: 0, merged: 0 };
++    return addToShoppingList([{ name, amount: String(amount || '').trim() || '1', unit: String(unit || '').trim() || 'phần' }], 'Mua tự do');
+   };
+ 
+-  // Onboarding methods
++  // ---------- Settings & onboarding ----------
++  const updateSettings = patch => setSettings(prev => ({ ...prev, ...patch }));
+   const completeOnboarding = () => {
+     setHasSeenOnboarding(true);
+     safeStorage.setItem(STORAGE_KEY_ONBOARDING, 'true');
+@@ -233,9 +359,18 @@ export const RecipeProvider = ({
+     setHasSeenOnboarding(false);
+     safeStorage.removeItem(STORAGE_KEY_ONBOARDING);
+   };
++
++  const timerSecondsLeft = useMemo(() => getTimerRemaining(cookingTimer, now), [cookingTimer, now]);
++
+   return <RecipeContext.Provider value={{
++    isHydrated,
+     cookingTimer,
+-    setCookingTimer,
++    timerSecondsLeft,
++    startStepTimer,
++    pauseTimer,
++    resumeTimer,
++    addTimerMinute,
++    clearTimer,
+     recipes,
+     favoriteIds,
+     selectedCategory,
+@@ -247,6 +382,7 @@ export const RecipeProvider = ({
+     addRecipe,
+     updateRecipe,
+     deleteRecipe,
++    findDuplicateRecipe,
+     toggleFavorite,
+     isFavorite,
+     getRecipeById,
+@@ -259,6 +395,8 @@ export const RecipeProvider = ({
+     deleteShoppingItem,
+     clearCheckedShoppingItems,
+     addCustomShoppingItem,
++    settings,
++    updateSettings,
+     hasSeenOnboarding,
+     completeOnboarding,
+     resetOnboarding
+diff --git a/src/services/recipeQr.js b/src/services/recipeQr.js
+index bfcc5a5..23a815b 100644
+--- a/src/services/recipeQr.js
++++ b/src/services/recipeQr.js
+@@ -52,25 +52,30 @@ const toCompact = (recipe, level) => {
+     })
+   };
+   if (recipe.calories) compact.cal = recipe.calories;
+-  if (level.image && recipe.imageUrl) compact.i = recipe.imageUrl;
+-  if (level.video && recipe.videoUrl) compact.v = recipe.videoUrl;
++  // Local file:// or content:// media only exists on the sender's phone — never worth the bytes
++  const isWeb = url => typeof url === 'string' && /^https?:\/\//i.test(url);
++  if (level.image && isWeb(recipe.imageUrl)) compact.i = recipe.imageUrl;
++  if (level.video && isWeb(recipe.videoUrl)) compact.v = recipe.videoUrl;
+   return compact;
+ };
+ 
+ /**
+  * Encodes a recipe into a QR-ready string.
+- * Returns { payload, bytes, truncated } — truncated is true when some detail was dropped.
++ * Returns { payload, bytes, truncated, tooLarge } — truncated is true when any detail was dropped
++ * (video, tips or shortened text); tooLarge when even the smallest level exceeds QR_MAX_BYTES
++ * (the QR may then be hard to scan, the text code still works).
+  */
+ export const encodeRecipeForQr = recipe => {
+   let payload = '';
++  let bytes = 0;
+   for (let i = 0; i < DETAIL_LEVELS.length; i++) {
+     payload = QR_PREFIX + JSON.stringify(toCompact(recipe, DETAIL_LEVELS[i]));
+-    const bytes = utf8ByteLength(payload);
+-    if (bytes <= QR_MAX_BYTES || i === DETAIL_LEVELS.length - 1) {
+-      return { payload, bytes, truncated: i > 1 };
++    bytes = utf8ByteLength(payload);
++    if (bytes <= QR_MAX_BYTES) {
++      return { payload, bytes, truncated: i > 0, tooLarge: false };
+     }
+   }
+-  return { payload, bytes: utf8ByteLength(payload), truncated: true };
++  return { payload, bytes, truncated: true, tooLarge: true };
+ };
+ 
+ const cleanStr = (value, fallback = '') => {
+diff --git a/src/utils/dialog.js b/src/utils/dialog.js
+new file mode 100644
+index 0000000..e3435e0
+--- /dev/null
++++ b/src/utils/dialog.js
+@@ -0,0 +1,27 @@
++// Cross-platform alert/confirm. React Native Web's Alert.alert is a no-op, so on web
++// every confirmation (exit cooking, delete recipe...) silently did nothing.
++import { Alert, Platform } from 'react-native';
++
++export const showAlert = (title, message = '') => {
++  if (Platform.OS === 'web') {
++    if (typeof window !== 'undefined') window.alert(message ? `${title}\n\n${message}` : title);
++    return;
++  }
++  Alert.alert(title, message);
++};
++
++/**
++ * Asks for confirmation. Resolves with nothing; `onConfirm` runs only if the user accepts.
++ */
++export const confirmAction = ({ title, message = '', confirmText = 'Đồng ý', cancelText = 'Hủy', destructive = false, onConfirm, onCancel }) => {
++  if (Platform.OS === 'web') {
++    const ok = typeof window === 'undefined' ? true : window.confirm(message ? `${title}\n\n${message}` : title);
++    if (ok) onConfirm?.();
++    else onCancel?.();
++    return;
++  }
++  Alert.alert(title, message, [
++    { text: cancelText, style: 'cancel', onPress: onCancel },
++    { text: confirmText, style: destructive ? 'destructive' : 'default', onPress: onConfirm }
++  ]);
++};
+diff --git a/src/utils/groceryAisles.js b/src/utils/groceryAisles.js
+index 09c2e6a..d98dd58 100644
+--- a/src/utils/groceryAisles.js
++++ b/src/utils/groceryAisles.js
+@@ -1,3 +1,8 @@
++// Groups shopping items by supermarket aisle using whole-word Vietnamese keywords.
++// Matching is word-based (see containsPhrase) so short keywords like "ốc", "cua", "ớt"
++// no longer match inside other words ("nước", "của", "bột"), and "đ" is handled.
++import { containsPhrase, normalizeVi } from './text';
++
+ const AISLES = [
+   { id: 'produce', label: 'Rau củ & trái cây' },
+   { id: 'meat', label: 'Thịt & gia cầm' },
+@@ -8,38 +13,34 @@ const AISLES = [
+   { id: 'other', label: 'Khác' }
+ ];
+ 
+-const normalize = value => value
+-  .normalize('NFD')
+-  .replace(/[\u0300-\u036f]/g, '')
+-  .toLowerCase();
++// Order matters: the first rule whose keyword matches wins.
++// More specific phrases ("dầu ăn", "cà rốt", "bột mì") come before generic words.
++const RULES = [
++  ['dairy', ['trung', 'sua tuoi', 'sua dac', 'sua chua', 'sua bot', 'pho mai', 'kem tuoi', 'bo lat', 'bo nhat']],
++  ['pantry', ['nuoc tuong', 'nuoc mam', 'nuoc cot dua', 'nuoc dua', 'dau olive', 'dau o liu', 'dau an', 'dau me', 'dau hao', 'dau dieu',
++    'duong', 'muoi', 'hat nem', 'bot ngot', 'bot nem', 'tieu den', 'tieu xay', 'gelatin', 'giam', 'siro', 'tra tui', 'tra xanh', 'me trang', 'me rang',
++    'mat ong', 'gia vi', 'xot', 'sot', 'tuong ot', 'tuong ca', 'bot bap', 'bot nang', 'cacao', 'ca phe', 'vani', 'que', 'hoi', 'ngu vi huong']],
++  ['bakery', ['banh mi', 'bot mi', 'yen mach', 'ngu coc', 'mi soi', 'mi y', 'mi trung', 'bun kho', 'bun tuoi', 'pho kho', 'banh pho', 'gao', 'nep', 'banh trang', 'banh quy']],
++  ['produce', ['ca rot', 'ca chua', 'ca tim', 'ca le', 'ca phao', 'ca tim', 'dua leo', 'dua chuot', 'dua hau', 'dua luoi']],
++  ['seafood', ['tom', 'ca hoi', 'ca ngu', 'ca basa', 'ca loc', 'ca thu', 'ca ro', 'ca chem', 'ca dieu hong', 'muc', 'bach tuoc', 'ngheu', 'so diep', 'cua', 'oc', 'hau', 'ghe', 'so', 'hai san']],
++  ['meat', ['thit', 'thit bo', 'bap bo', 'bo phi le', 'bo vien', 'than bo', 'bo uc', 'bo bit tet', 'heo', 'lon', 'ga', 'vit', 'cuu', 'suon', 'ba roi', 'ribeye', 'xuc xich', 'lap xuong', 'cha lua', 'gio lua', 'thit nguoi']],
++  ['dairy', ['sua', 'pho mai', 'phomai', 'bo lat', 'bo nhat', 'kem tuoi', 'kem whipping', 'whipping', 'sua chua', 'trung', 'yogurt', 'bo']],
++  ['produce', ['rau', 'xa lach', 'cai', 'hanh', 'toi', 'ot', 'gung', 'rieng', 'sa', 'xoai', 'cam', 'chanh', 'bi', 'dau', 'khoai', 'nam', 'bap', 'ngo',
++    'chuoi', 'tao', 'dua', 'bo sap', 'thom', 'ngo ri', 'rau mui', 'hung que', 'la', 'dau hu', 'dau phu', 'gia', 'tieu xanh', 'muop', 'su su', 'bo xoi', 'trai cay', 'dao', 'nho', 'le', 'qua']],
++  ['pantry', ['tieu', 'bot', 'dau', 'nuoc loc']]
++];
+ 
+-const matchesAny = (value, terms) => terms.some(term => value.includes(term));
++// Words that look like a keyword but mean something else in an ingredient name.
++const EXCLUDE = { meat: ['bo lat', 'bo nhat', 'bo sap', 'bo xoi', 'bo dau'], dairy: ['bo sap', 'bo xoi'] };
+ 
+ export const getGroceryAisle = ingredientName => {
+-  const name = normalize(ingredientName || '');
+-
+-  if (matchesAny(name, ['ca rot', 'ca chua', 'ca tim', 'ca le'])) {
+-    return AISLES[0];
+-  }
+-  if (name === 'tom' || name.startsWith('tom ') || name.includes(', tom')
+-    || matchesAny(name, ['ca hoi', 'ca ngu', 'ca basa', 'muc', 'bach tuoc', 'ngheu', 'so diep', 'cua', 'oc', 'ca loc', 'ca thu'])
+-    || name === 'ca ro' || name.startsWith('ca ro,') || name.startsWith('ca ro ')) {
+-    return AISLES[2];
+-  }
+-  if (name.startsWith('thit ') || matchesAny(name, ['bo uc', 'ribeye', 'suon', 'uc ga', 'ga ta', 'thit nguoi', 'xuc xich', 'ba roi'])) {
+-    return AISLES[1];
+-  }
+-  if (matchesAny(name, ['sua', 'pho mai', 'phomai', 'bo lat', 'kem tuoi', 'sua chua', 'trung'])) {
+-    return AISLES[3];
+-  }
+-  if (matchesAny(name, ['banh mi', 'bot mi', 'yen mach', 'ngu coc', 'mi soi', 'bun kho', 'pho kho', 'gao'])) {
+-    return AISLES[4];
+-  }
+-  if (matchesAny(name, ['rau', 'xa lach', 'ca chua', 'hanh', 'toi', 'ot', 'gung', 'sa tuoi', 'sa ', 'bo sap', 'xoai', 'cam', 'chanh', 'dua leo', 'dau ', 'khoai', 'nam ', 'nam,', 'ca rot', 'bi xanh', 'tieu xanh'])) {
+-    return AISLES[0];
+-  }
+-  if (matchesAny(name, ['nuoc tuong', 'nuoc mam', 'nuoc loc', 'nuoc cot dua', 'dau olive', 'dau an', 'duong', 'muoi', 'tieu', 'bot ', 'gelatin', 'giam', 'siro', 'tra tui', 'me trang', 'mat ong', 'xot'])) {
+-    return AISLES[5];
++  const name = normalizeVi(ingredientName);
++  if (!name) return AISLES[6];
++  for (const [aisleId, keywords] of RULES) {
++    const excluded = (EXCLUDE[aisleId] || []).some(word => containsPhrase(name, word));
++    if (!excluded && keywords.some(keyword => containsPhrase(name, keyword))) {
++      return AISLES.find(aisle => aisle.id === aisleId);
++    }
+   }
+   return AISLES[6];
+ };
+diff --git a/src/utils/quantity.js b/src/utils/quantity.js
+new file mode 100644
+index 0000000..f70f3ca
+--- /dev/null
++++ b/src/utils/quantity.js
+@@ -0,0 +1,57 @@
++// Parsing, scaling and merging of free-text ingredient amounts ("150", "1/2", "1 1/2", "2,5", "Vừa đủ").
++
++const UNICODE_FRACTIONS = { '½': 0.5, '⅓': 1 / 3, '⅔': 2 / 3, '¼': 0.25, '¾': 0.75 };
++
++/**
++ * Reads the leading number of an amount.
++ * @returns {{ value: number, rest: string } | null} null when the amount is not numeric ("Vừa đủ").
++ */
++export const parseAmount = amount => {
++  if (typeof amount === 'number') return Number.isFinite(amount) ? { value: amount, rest: '' } : null;
++  const text = String(amount ?? '').trim();
++  if (!text) return null;
++  let match = text.match(/^(\d+)\s+(\d+)\/(\d+)(.*)$/); // mixed fraction "1 1/2"
++  if (match && Number(match[3]) > 0) {
++    return { value: Number(match[1]) + Number(match[2]) / Number(match[3]), rest: match[4] };
++  }
++  match = text.match(/^(\d+)\/(\d+)(.*)$/);
++  if (match && Number(match[2]) > 0) return { value: Number(match[1]) / Number(match[2]), rest: match[3] };
++  match = text.match(/^(\d+)?\s*([½⅓⅔¼¾])(.*)$/);
++  if (match) return { value: Number(match[1] || 0) + UNICODE_FRACTIONS[match[2]], rest: match[3] };
++  match = text.match(/^(\d+(?:[.,]\d+)?)(.*)$/);
++  if (match) return { value: Number(match[1].replace(',', '.')), rest: match[2] };
++  return null;
++};
++
++export const formatNumber = value => {
++  const rounded = Math.round(value * 10) / 10;
++  if (Number.isInteger(rounded)) return String(rounded);
++  return rounded.toFixed(1).replace('.', ',');
++};
++
++// Scales the leading number by `ratio`; text amounts ("Vừa đủ") are returned unchanged.
++export const scaleAmount = (amount, ratio) => {
++  const parsed = parseAmount(amount);
++  if (!parsed || !Number.isFinite(ratio) || ratio <= 0) return amount == null ? '' : String(amount);
++  if (ratio === 1) return String(amount);
++  const scaled = parsed.value * ratio;
++  // Never round a non-zero quantity down to 0 ("1/4 muỗng" x 0.25 stays visible)
++  const shown = scaled > 0 && scaled < 0.1 ? '0,1' : formatNumber(scaled);
++  return `${shown}${parsed.rest}`;
++};
++
++/** Sums two amounts when both are plain numbers; returns null when they cannot be added. */
++export const addAmounts = (a, b) => {
++  const pa = parseAmount(a);
++  const pb = parseAmount(b);
++  if (!pa || !pb || pa.rest.trim() || pb.rest.trim()) return null;
++  return formatNumber(pa.value + pb.value);
++};
++
++/** Parses a user-typed whole number within [min, max]; returns null when invalid. */
++export const parseIntInRange = (text, min, max) => {
++  const value = String(text ?? '').trim();
++  if (!/^\d+$/.test(value)) return null;
++  const n = Number(value);
++  return n >= min && n <= max ? n : null;
++};
+diff --git a/src/utils/recipeModel.js b/src/utils/recipeModel.js
+new file mode 100644
+index 0000000..0a12658
+--- /dev/null
++++ b/src/utils/recipeModel.js
+@@ -0,0 +1,78 @@
++// Normalizes recipe objects coming from storage, the create form, QR codes or AI variants,
++// so every screen can rely on the same shape (no undefined arrays, numbered steps, unique ids).
++import { normalizeVi } from './text';
++
++let idCounter = 0;
++export const makeId = prefix => {
++  idCounter = (idCounter + 1) % 100000;
++  return `${prefix}_${Date.now().toString(36)}${idCounter.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
++};
++
++const str = (value, fallback = '') => {
++  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
++  if (typeof value !== 'string') return fallback;
++  return value.trim() || fallback;
++};
++
++const num = (value, fallback, min, max) => {
++  const n = Number(value);
++  if (!Number.isFinite(n)) return fallback;
++  return Math.min(max, Math.max(min, Math.round(n)));
++};
++
++export const DEFAULT_RECIPE_IMAGE = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80';
++
++export const normalizeRecipe = recipe => {
++  if (!recipe || typeof recipe !== 'object') return null;
++  const title = str(recipe.title);
++  if (!title) return null;
++
++  // Ingredient ids must be unique inside a recipe: the checklist and AI substitutions key on them.
++  const seenIds = new Set();
++  const ingredients = (Array.isArray(recipe.ingredients) ? recipe.ingredients : [])
++    .filter(item => item && str(item.name))
++    .map((item, idx) => {
++      let id = str(item.id, `i${idx + 1}`);
++      while (seenIds.has(id)) id = `${id}_${idx}`;
++      seenIds.add(id);
++      return { ...item, id, name: str(item.name), amount: str(item.amount, 'Vừa đủ'), unit: str(item.unit) };
++    });
++
++  const steps = (Array.isArray(recipe.steps) ? recipe.steps : [])
++    .filter(step => step && (str(step.instruction) || str(step.title)))
++    .map((step, idx) => {
++      const seconds = Number(step.timerSeconds);
++      return {
++        ...step,
++        stepNumber: idx + 1,
++        title: str(step.title, `Bước ${idx + 1}`),
++        instruction: str(step.instruction, str(step.title, `Bước ${idx + 1}`)),
++        timerSeconds: Number.isFinite(seconds) && seconds > 0 ? Math.min(Math.round(seconds), 24 * 3600) : null
++      };
++    });
++
++  return {
++    ...recipe,
++    title,
++    description: str(recipe.description),
++    imageUrl: str(recipe.imageUrl, DEFAULT_RECIPE_IMAGE),
++    category: str(recipe.category, 'Món chính 🍲'),
++    difficulty: ['Dễ', 'Vừa', 'Khó'].includes(recipe.difficulty) ? recipe.difficulty : 'Vừa',
++    prepTimeMinutes: num(recipe.prepTimeMinutes, 0, 0, 1440),
++    cookTimeMinutes: num(recipe.cookTimeMinutes, 0, 0, 1440),
++    servings: num(recipe.servings, 2, 1, 100),
++    ingredients,
++    steps
++  };
++};
++
++export const totalMinutes = recipe => (recipe?.prepTimeMinutes || 0) + (recipe?.cookTimeMinutes || 0);
++
++export const hasVideo = recipe => !!(recipe?.videoUrl || recipe?.steps?.some(step => step.videoUrl));
++export const hasTimer = recipe => !!recipe?.steps?.some(step => step.timerSeconds);
++
++// Signature used to detect that an imported recipe is already in the user's collection.
++export const recipeSignature = recipe => [
++  normalizeVi(recipe?.title),
++  ...(recipe?.ingredients || []).map(i => normalizeVi(i.name)).sort()
++].join('|');
+diff --git a/src/utils/text.js b/src/utils/text.js
+new file mode 100644
+index 0000000..605f4f0
+--- /dev/null
++++ b/src/utils/text.js
+@@ -0,0 +1,31 @@
++// Vietnamese-aware text helpers shared by search, pantry matching and grocery aisles.
++// NFD does not decompose "đ/Đ", so it must be mapped explicitly — otherwise
++// "đường" never matches "duong" and "đậu" never matches "dau".
++
++export const normalizeVi = value => String(value ?? '')
++  .normalize('NFD')
++  .replace(/[̀-ͯ]/g, '')
++  .replace(/đ/g, 'd')
++  .replace(/Đ/g, 'D')
++  .toLowerCase()
++  .replace(/\s+/g, ' ')
++  .trim();
++
++// Splits a normalized string into word tokens (letters/digits only).
++export const tokensOf = value => normalizeVi(value).split(/[^a-z0-9]+/).filter(Boolean);
++
++// True when every word of `phrase` appears in `text` as consecutive whole words.
++// "ca rot" matches "ca rot baby" but "oc" no longer matches "nuoc".
++export const containsPhrase = (text, phrase) => {
++  const hay = ` ${tokensOf(text).join(' ')} `;
++  const needle = tokensOf(phrase).join(' ');
++  return needle.length > 0 && hay.includes(` ${needle} `);
++};
++
++// Free-text search: every query word must appear (as a word prefix) somewhere in the fields.
++export const matchesSearch = (fields, query) => {
++  const words = tokensOf(query);
++  if (words.length === 0) return true;
++  const haystack = fields.flatMap(tokensOf);
++  return words.every(word => haystack.some(token => token.startsWith(word)));
++};
