@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRecipes } from '../context/RecipeContext';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
@@ -14,7 +14,10 @@ import { ShoppingListModal } from '../components/ShoppingListModal';
 import { QrScannerModal } from '../components/QrScannerModal';
 import { PantryFinderModal } from '../components/PantryFinderModal';
 import { FloatingTimerWidget } from '../components/ui/FloatingTimerWidget';
-const CATEGORIES = ['Tất cả', 'Món nhanh ⚡', 'Món chính 🍲', 'Ăn kiêng 🥗', 'Tráng miệng 🍰', 'Thức uống 🍹'];
+import { matchesSearch } from '../utils/text';
+import { hasTimer, hasVideo, totalMinutes } from '../utils/recipeModel';
+import { showAlert } from '../utils/dialog';
+import { CATEGORIES } from '../types/recipe';
 export default function AppMainScreen() {
   const {
     recipes,
@@ -27,8 +30,12 @@ export default function AppMainScreen() {
     toggleFavorite,
     isFavorite,
     hasSeenOnboarding,
-    shoppingList
+    isHydrated,
+    shoppingList,
+    cookingTimer,
+    getRecipeById
   } = useRecipes();
+  const [cookingStartStep, setCookingStartStep] = useState(null);
 
   // Navigation tab state: 'explore' | 'myRecipes'
   const [currentTab, setCurrentTab] = useState('explore');
@@ -45,14 +52,35 @@ export default function AppMainScreen() {
   const [isPantryVisible, setIsPantryVisible] = useState(false);
 
   // Filtered recipes
+  // Diacritic-insensitive: "pho bo" finds "Phở bò", "duong" finds "Đường"
   const filteredRecipes = useMemo(() => {
     return recipes.filter(recipe => {
       const matchCat = selectedCategory === 'Tất cả' || recipe.category === selectedCategory;
-      const matchQuery = searchQuery.trim() === '' || recipe.title.toLowerCase().includes(searchQuery.toLowerCase()) || recipe.description.toLowerCase().includes(searchQuery.toLowerCase()) || recipe.ingredients.some(i => i.name.toLowerCase().includes(searchQuery.toLowerCase()));
+      const matchQuery = matchesSearch([recipe.title, recipe.description, recipe.category, ...(recipe.ingredients || []).map(i => i.name)], searchQuery);
       return matchCat && matchQuery;
     });
   }, [recipes, selectedCategory, searchQuery]);
-  const featuredRecipe = recipes[0];
+  const featuredRecipe = recipes.find(r => !r.isCustom) || recipes[0];
+  const pendingShoppingCount = shoppingList.filter(item => !item.checked).length;
+  const isFiltering = searchQuery.trim() !== '' || selectedCategory !== 'Tất cả';
+  const openCooking = (recipe, stepIndex = null) => {
+    if (!recipe?.steps?.length) {
+      showAlert('Chưa có bước nấu', 'Công thức này chưa có bước hướng dẫn nào. Hãy sửa công thức để thêm bước trước khi nấu.');
+      return;
+    }
+    setActiveRecipeForCooking(recipe);
+    setCookingStartStep(stepIndex);
+    // iOS cannot present a modal while another one is still dismissing
+    if (Platform.OS === 'ios') setTimeout(() => setIsCookingVisible(true), 450);
+    else setIsCookingVisible(true);
+  };
+  const reopenTimerStep = () => {
+    const recipe = cookingTimer ? getRecipeById(cookingTimer.recipeId) : null;
+    if (!recipe) return;
+    setActiveRecipeForCooking(recipe);
+    setCookingStartStep(cookingTimer.stepIndex);
+    setIsCookingVisible(true);
+  };
   const handleEditRecipe = recipe => {
     setEditingRecipe(recipe);
     setIsCreateModalVisible(true);
@@ -88,7 +116,7 @@ export default function AppMainScreen() {
             </Pressable>
 
             {/* Shopping List Button */}
-            <Pressable onPress={() => setIsShoppingListVisible(true)} style={({
+            <Pressable accessibilityRole="button" accessibilityLabel={`Danh sách đi chợ, còn ${pendingShoppingCount} món cần mua`} onPress={() => setIsShoppingListVisible(true)} style={({
             pressed
           }) => [styles.headerActionBtn, {
             transform: [{
@@ -96,13 +124,13 @@ export default function AppMainScreen() {
             }]
           }]}>
               <Text style={styles.headerActionIcon}>🛒</Text>
-              {shoppingList.length > 0 ? <View style={styles.badgeCounter}>
-                  <Text style={styles.badgeCounterText}>{shoppingList.length}</Text>
+              {pendingShoppingCount > 0 ? <View style={styles.badgeCounter}>
+                  <Text style={styles.badgeCounterText}>{pendingShoppingCount > 99 ? '99+' : pendingShoppingCount}</Text>
                 </View> : null}
             </Pressable>
 
             {/* Settings Button */}
-            <Pressable onPress={() => setIsSettingsModalVisible(true)} style={({
+            <Pressable accessibilityRole="button" accessibilityLabel="Cài đặt" onPress={() => setIsSettingsModalVisible(true)} style={({
             pressed
           }) => [styles.headerActionBtn, {
             transform: [{
@@ -118,7 +146,7 @@ export default function AppMainScreen() {
             {/* Heron Precision Search Bar */}
             <View style={styles.searchBar}>
               <Text style={styles.searchIcon}>⌕</Text>
-              <TextInput style={styles.searchInput} placeholder="Tìm kiếm công thức, nguyên liệu..." placeholderTextColor={HeronColors.disable} value={searchQuery} onChangeText={setSearchQuery} />
+              <TextInput style={styles.searchInput} placeholder="Tìm kiếm công thức, nguyên liệu..." placeholderTextColor={HeronColors.disable} value={searchQuery} onChangeText={setSearchQuery} returnKeyType="search" autoCorrect={false} clearButtonMode="never" />
               {searchQuery.length > 0 ? <Pressable onPress={() => setSearchQuery('')} style={styles.clearSearchBtn}>
                   <Text style={styles.clearSearchText}>✕</Text>
                 </Pressable> : null}
@@ -148,7 +176,7 @@ export default function AppMainScreen() {
             </ScrollView>
 
             {/* Featured Hero Card (Architectural Poster) */}
-            {searchQuery.trim() === '' && selectedCategory === 'Tất cả' && featuredRecipe ? <Pressable onPress={() => setSelectedRecipeForDetail(featuredRecipe)} style={({
+            {!isFiltering && featuredRecipe ? <Pressable onPress={() => setSelectedRecipeForDetail(featuredRecipe)} style={({
           pressed
         }) => [styles.heroCard, {
           transform: [{
@@ -182,22 +210,22 @@ export default function AppMainScreen() {
                     <View style={styles.heroMetaRow}>
                       <View style={styles.heroMetaPill}>
                         <Text style={styles.heroMetaText}>
-                          ⏱ {featuredRecipe.prepTimeMinutes + featuredRecipe.cookTimeMinutes} PHÚT
+                          ⏱ {totalMinutes(featuredRecipe)} PHÚT
                         </Text>
                       </View>
                       <View style={styles.heroMetaPill}>
                         <Text style={styles.heroMetaText}>🎯 {featuredRecipe.difficulty.toUpperCase()}</Text>
                       </View>
-                      <View style={[styles.heroMetaPill, {
+                      {hasVideo(featuredRecipe) || hasTimer(featuredRecipe) ? <View style={[styles.heroMetaPill, {
                   backgroundColor: HeronColors.brand
                 }]}>
                         <Text style={[styles.heroMetaText, {
                     color: '#FFFFFF',
                     fontWeight: '900'
                   }]}>
-                          🎥 VIDEO & ⏱ TIMER
+                          {[hasVideo(featuredRecipe) && '🎥 VIDEO', hasTimer(featuredRecipe) && '⏱ TIMER'].filter(Boolean).join(' & ')}
                         </Text>
-                      </View>
+                      </View> : null}
                     </View>
                   </View>
                 </View>
@@ -208,7 +236,7 @@ export default function AppMainScreen() {
               <View style={styles.sectionTitleRow}>
                 <View style={styles.sectionSquare} />
                 <Text style={styles.sectionTitle}>
-                  {selectedCategory === 'Tất cả' ? 'DANH SÁCH CÔNG THỨC' : selectedCategory.toUpperCase()}
+                  {searchQuery.trim() ? 'KẾT QUẢ TÌM KIẾM' : selectedCategory === 'Tất cả' ? 'DANH SÁCH CÔNG THỨC' : selectedCategory.toUpperCase()}
                 </Text>
               </View>
               <Text style={styles.sectionCount}>[{filteredRecipes.length}]</Text>
@@ -221,6 +249,12 @@ export default function AppMainScreen() {
                 <Text style={styles.noResultText}>
                   Hãy thử từ khóa khác hoặc chuyển sang danh mục khác.
                 </Text>
+                {isFiltering ? <Pressable onPress={() => {
+              setSearchQuery('');
+              setSelectedCategory('Tất cả');
+            }} style={styles.resetFilterBtn}>
+                    <Text style={styles.resetFilterText}>Xóa bộ lọc</Text>
+                  </Pressable> : null}
               </View> : <View style={styles.recipeGrid}>
                 {filteredRecipes.map(item => {
             const isFav = isFavorite(item.id);
@@ -236,9 +270,9 @@ export default function AppMainScreen() {
                         <Image source={{
                   uri: item.imageUrl
                 }} style={styles.cardImage} resizeMode="cover" />
-                        <View style={styles.cardVideoTag}>
+                        {hasVideo(item) ? <View style={styles.cardVideoTag}>
                           <Text style={styles.cardVideoTagText}>🎥 VIDEO</Text>
-                        </View>
+                        </View> : null}
                         <Pressable onPress={e => {
                   e.stopPropagation();
                   toggleFavorite(item.id);
@@ -252,7 +286,7 @@ export default function AppMainScreen() {
                         <View style={styles.cardTopMeta}>
                           <AppleBadge label={item.category} variant="coral" />
                           <Text style={styles.cardTimeMeta}>
-                            ⏱ {item.prepTimeMinutes + item.cookTimeMinutes}P
+                            ⏱ {totalMinutes(item)}P
                           </Text>
                         </View>
 
@@ -267,13 +301,15 @@ export default function AppMainScreen() {
                           <Text style={styles.cardSpecText}>ĐỘ KHÓ: {item.difficulty.toUpperCase()}</Text>
                           <Text style={styles.cardSpecText}>•</Text>
                           <Text style={styles.cardSpecText}>{item.steps.length} BƯỚC NẤU</Text>
-                          <Text style={styles.cardSpecText}>•</Text>
-                          <Text style={[styles.cardSpecText, {
-                    color: HeronColors.brand,
-                    fontWeight: '800'
-                  }]}>
-                            ⏱ ĐẾM GIỜ
-                          </Text>
+                          {hasTimer(item) ? <>
+                              <Text style={styles.cardSpecText}>•</Text>
+                              <Text style={[styles.cardSpecText, {
+                      color: HeronColors.brand,
+                      fontWeight: '800'
+                    }]}>
+                                ⏱ ĐẾM GIỜ
+                              </Text>
+                            </> : null}
                         </View>
                       </View>
                     </Pressable>;
@@ -281,7 +317,7 @@ export default function AppMainScreen() {
               </View>}
 
             <View style={{
-          height: 110
+          height: 170
         }} />
           </ScrollView> : <MyRecipesView onSelectRecipe={rec => setSelectedRecipeForDetail(rec)} onEditRecipe={rec => handleEditRecipe(rec)} />}
 
@@ -319,17 +355,20 @@ export default function AppMainScreen() {
         </View>
 
         {/* Modals */}
-        <RecipeDetailModal recipe={selectedRecipeForDetail} visible={!!selectedRecipeForDetail} onClose={() => setSelectedRecipeForDetail(null)} onStartCooking={rec => { setActiveRecipeForCooking(rec); setIsCookingVisible(true); }} />
+        <RecipeDetailModal recipe={selectedRecipeForDetail} visible={!!selectedRecipeForDetail} onClose={() => setSelectedRecipeForDetail(null)} onStartCooking={rec => openCooking(rec)} />
 
-        <CookingModeModal recipe={activeRecipeForCooking} visible={!!activeRecipeForCooking && isCookingVisible} onClose={() => setIsCookingVisible(false)} />
+        <CookingModeModal recipe={activeRecipeForCooking} visible={!!activeRecipeForCooking && isCookingVisible} initialStepIndex={cookingStartStep} onClose={() => {
+        setIsCookingVisible(false);
+        setCookingStartStep(null);
+      }} />
 
-        {!isCookingVisible ? <FloatingTimerWidget onPress={() => setIsCookingVisible(true)} /> : null}
+        {!isCookingVisible ? <FloatingTimerWidget onPress={reopenTimerStep} bottomOffset={100} /> : null}
 
         <CreateRecipeModal visible={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} editingRecipe={editingRecipe} />
 
-        <SettingsModal visible={isSettingsModalVisible} onClose={() => setIsSettingsModalVisible(false)} onReopenOnboarding={() => setIsOnboardingVisible(true)} />
+        <SettingsModal visible={isSettingsModalVisible} onClose={() => setIsSettingsModalVisible(false)} onReopenOnboarding={() => setTimeout(() => setIsOnboardingVisible(true), Platform.OS === 'ios' ? 450 : 0)} />
 
-        <OnboardingModal visible={!hasSeenOnboarding || isOnboardingVisible} onClose={() => setIsOnboardingVisible(false)} />
+        <OnboardingModal visible={isHydrated && (!hasSeenOnboarding || isOnboardingVisible)} onClose={() => setIsOnboardingVisible(false)} />
 
         <ShoppingListModal visible={isShoppingListVisible} onClose={() => setIsShoppingListVisible(false)} />
 
@@ -346,6 +385,22 @@ export default function AppMainScreen() {
     </SafeAreaView>;
 }
 const styles = StyleSheet.create({
+  resetFilterBtn: {
+    marginTop: 14,
+    minHeight: 44,
+    paddingHorizontal: 18,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: HeronColors.border,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  resetFilterText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: HeronColors.brand
+  },
   safeArea: {
     flex: 1,
     backgroundColor: HeronColors.canvas

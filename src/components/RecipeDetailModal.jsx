@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Image, Pressable, Alert } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, Image, Pressable } from 'react-native';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { AppleBadge } from './ui/AppleBadge';
 import { AppleButton } from './ui/AppleButton';
 import { useRecipes } from '../context/RecipeContext';
 import { AiChefChatModal, SOUS_CHEF_SUGGESTIONS } from './AiChefChatModal';
 import { ShareRecipeModal } from './ShareRecipeModal';
+import { scaleAmount } from '../utils/quantity';
+import { showAlert } from '../utils/dialog';
+import { hasTimer, hasVideo, totalMinutes } from '../utils/recipeModel';
+const MAX_SERVINGS = 50;
 export const RecipeDetailModal = ({
   recipe: recipeProp,
   visible,
@@ -28,7 +32,25 @@ export const RecipeDetailModal = ({
   useEffect(() => {
     if (recipe) setCurrentServings(recipe.servings);
   }, [recipe?.id, recipe?.servings]);
+  // Ingredient ids ("i1", "i2"...) repeat across recipes: a new recipe must start with a clean checklist
+  useEffect(() => {
+    setCheckedIngredients({});
+  }, [recipe?.id]);
   if (!recipe) return null;
+  const ratio = currentServings / Math.max(1, recipe.servings);
+  const readyCount = recipe.ingredients.filter(item => checkedIngredients[item.id]).length;
+  const missingIngredients = recipe.ingredients.filter(item => !checkedIngredients[item.id]);
+  const handleAddToShopping = () => {
+    if (missingIngredients.length === 0) {
+      showAlert('Đã đủ nguyên liệu ✓', 'Bạn đã đánh dấu có sẵn tất cả nguyên liệu, không cần mua thêm.');
+      return;
+    }
+    const { added, merged } = addToShoppingList(missingIngredients.map(item => ({
+      ...item,
+      amount: scaleAmount(item.amount, ratio)
+    })), `${recipe.title} (${currentServings} người)`);
+    showAlert('Đã cập nhật danh sách đi chợ 🛒', [added ? `Thêm mới ${added} nguyên liệu.` : '', merged ? `Cộng dồn ${merged} nguyên liệu đã có trong danh sách.` : ''].filter(Boolean).join(' '));
+  };
   const isFav = isFavorite(recipe.id);
   const toggleCheck = id => {
     setCheckedIngredients(prev => ({
@@ -75,14 +97,14 @@ export const RecipeDetailModal = ({
               <AppleBadge label={recipe.category} variant="coral" />
             </View>
             <View style={styles.featureBadgeWrap}>
-              <View style={styles.featureBadge}>
+              {hasVideo(recipe) ? <View style={styles.featureBadge}>
                 <Text style={styles.featureBadgeText}>🎥 VIDEO TỪNG BƯỚC</Text>
-              </View>
-              <View style={[styles.featureBadge, {
+              </View> : null}
+              {hasTimer(recipe) ? <View style={[styles.featureBadge, {
               backgroundColor: 'rgba(250, 54, 0, 0.92)'
             }]}>
-                <Text style={styles.featureBadgeText}>⏱ ĐẾM GIỜ TỰ ĐỘNG</Text>
-              </View>
+                <Text style={styles.featureBadgeText}>⏱ ĐẾM GIỜ THEO BƯỚC</Text>
+              </View> : null}
             </View>
           </View>
 
@@ -92,7 +114,7 @@ export const RecipeDetailModal = ({
               <Text style={styles.metaCode}>RECIPE SPEC // ID_{recipe.id.toUpperCase()}</Text>
             </View>
             <Text style={styles.title}>{recipe.title}</Text>
-            <Text style={styles.description}>{recipe.description}</Text>
+            {recipe.description ? <Text style={styles.description}>{recipe.description}</Text> : null}
           </View>
 
           {/* Personal copy adjusted by AI Sous-Chef */}
@@ -111,16 +133,16 @@ export const RecipeDetailModal = ({
             <View style={styles.statCell}>
               <Text style={styles.statKey}>THỜI GIAN</Text>
               <Text style={styles.statVal}>
-                {recipe.prepTimeMinutes + recipe.cookTimeMinutes} phút
+                {totalMinutes(recipe)} phút
               </Text>
             </View>
 
             <View style={[styles.statCell, styles.statCellBorder]}>
               <Text style={styles.statKey}>KHẨU PHẦN</Text>
               <View style={styles.portionControls}>
-                <Pressable accessibilityLabel="Giảm khẩu phần" onPress={() => setCurrentServings(value => Math.max(1, value - 1))} style={styles.portionButton}><Text style={styles.portionButtonText}>−</Text></Pressable>
+                <Pressable accessibilityLabel="Giảm khẩu phần" disabled={currentServings <= 1} hitSlop={8} onPress={() => setCurrentServings(value => Math.max(1, value - 1))} style={[styles.portionButton, currentServings <= 1 && styles.portionButtonDisabled]}><Text style={styles.portionButtonText}>−</Text></Pressable>
                 <Text style={styles.statVal}>{currentServings} người</Text>
-                <Pressable accessibilityLabel="Tăng khẩu phần" onPress={() => setCurrentServings(value => value + 1)} style={styles.portionButton}><Text style={styles.portionButtonText}>+</Text></Pressable>
+                <Pressable accessibilityLabel="Tăng khẩu phần" disabled={currentServings >= MAX_SERVINGS} hitSlop={8} onPress={() => setCurrentServings(value => Math.min(MAX_SERVINGS, value + 1))} style={[styles.portionButton, currentServings >= MAX_SERVINGS && styles.portionButtonDisabled]}><Text style={styles.portionButtonText}>+</Text></Pressable>
               </View>
             </View>
 
@@ -131,7 +153,7 @@ export const RecipeDetailModal = ({
 
             {recipe.calories ? <View style={[styles.statCell, styles.statCellBorder]}>
                 <Text style={styles.statKey}>CALORIES</Text>
-                <Text style={styles.statVal}>{recipe.calories} kcal</Text>
+                <Text style={styles.statVal}>{recipe.calories} kcal/phần</Text>
               </View> : null}
           </View>
 
@@ -143,7 +165,7 @@ export const RecipeDetailModal = ({
                 <Text style={styles.sectionTitle}>NGUYÊN LIỆU CHUẨN BỊ</Text>
               </View>
               <Text style={styles.sectionSubtitle}>
-                {Object.values(checkedIngredients).filter(Boolean).length}/{recipe.ingredients.length} SẴN SÀNG
+                {readyCount}/{recipe.ingredients.length} ĐÃ CÓ
               </Text>
             </View>
 
@@ -159,7 +181,7 @@ export const RecipeDetailModal = ({
                     </Text>
                     <View style={styles.amountBadge}>
                       <Text style={[styles.ingredientAmount, isChecked && styles.ingredientAmountChecked]}>
-                        {scaleAmount(item.amount, currentServings / Math.max(1, recipe.servings))} {item.unit}
+                        {scaleAmount(item.amount, ratio)} {item.unit}
                       </Text>
                     </View>
                   </Pressable>;
@@ -167,13 +189,8 @@ export const RecipeDetailModal = ({
             </View>
 
             {/* Quick Add to Shopping List Button */}
-            <Pressable onPress={() => {
-            addToShoppingList(recipe.ingredients.map(item => ({
-              ...item,
-              amount: scaleAmount(item.amount, currentServings / Math.max(1, recipe.servings))
-            })), recipe.title);
-            Alert.alert('Thành công! 🛒', `Đã thêm ${recipe.ingredients.length} nguyên liệu của món "${recipe.title}" vào Danh sách đi chợ của bạn.`);
-          }} style={({
+            <Text style={styles.checklistHint}>Đánh dấu ✓ nguyên liệu bạn đã có — phần còn lại sẽ được đưa vào danh sách đi chợ.</Text>
+            <Pressable onPress={handleAddToShopping} style={({
             pressed
           }) => [styles.addShoppingListBtn, {
             transform: [{
@@ -182,7 +199,7 @@ export const RecipeDetailModal = ({
           }]}>
               <Text style={styles.addShoppingListIcon}>🛒</Text>
               <Text style={styles.addShoppingListText}>
-                THÊM {recipe.ingredients.length} NGUYÊN LIỆU VÀO DANH SÁCH ĐI CHỢ
+                {missingIngredients.length ? `THÊM ${missingIngredients.length} NGUYÊN LIỆU CÒN THIẾU VÀO DANH SÁCH` : 'ĐÃ ĐỦ NGUYÊN LIỆU ✓'}
               </Text>
             </Pressable>
           </View>
@@ -274,17 +291,16 @@ export const RecipeDetailModal = ({
       </View>
     </Modal>;
 };
-const scaleAmount = (amount, ratio) => {
-  const match = amount.match(/^\s*(\d+(?:\.\d+)?|\d+\/\d+)(.*)$/);
-  if (!match) return amount;
-  const value = match[1].includes('/')
-    ? Number(match[1].split('/')[0]) / Number(match[1].split('/')[1])
-    : Number(match[1]);
-  if (!Number.isFinite(value)) return amount;
-  const scaled = Math.round(value * ratio * 10) / 10;
-  return `${Number.isInteger(scaled) ? scaled : scaled.toFixed(1)}${match[2]}`;
-};
 const styles = StyleSheet.create({
+  portionButtonDisabled: {
+    opacity: 0.35
+  },
+  checklistHint: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: HeronColors.granite,
+    marginTop: 10
+  },
   container: {
     flex: 1,
     backgroundColor: HeronColors.canvas

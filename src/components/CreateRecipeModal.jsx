@@ -1,10 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, TextInput, Pressable, Alert, KeyboardAvoidingView, Platform, Image } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, TextInput, Pressable, KeyboardAvoidingView, Platform, Image } from 'react-native';
+import { confirmAction, showAlert } from '../utils/dialog';
+import { parseIntInRange } from '../utils/quantity';
+import { normalizeVi } from '../utils/text';
+import { DEFAULT_RECIPE_IMAGE, makeId } from '../utils/recipeModel';
+import { CATEGORIES as ALL_CATEGORIES } from '../types/recipe';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
-const CATEGORIES = ['Món nhanh ⚡', 'Món chính 🍲', 'Ăn kiêng 🥗', 'Tráng miệng 🍰', 'Thức uống 🍹'];
+const CATEGORIES = ALL_CATEGORIES.filter(cat => cat !== 'Tất cả');
 const DIFFICULTIES = ['Dễ', 'Vừa', 'Khó'];
 export const CreateRecipeModal = ({
   visible,
@@ -70,7 +75,7 @@ export const CreateRecipeModal = ({
       setSteps(editingRecipe.steps.map(s => ({
         title: s.title,
         instruction: s.instruction,
-        timerMinutes: s.timerSeconds ? Math.floor(s.timerSeconds / 60).toString() : '',
+        timerMinutes: s.timerSeconds ? Math.max(1, Math.round(s.timerSeconds / 60)).toString() : '',
         tip: s.tip || '',
         image: s.image,
         videoUrl: s.videoUrl
@@ -112,7 +117,7 @@ export const CreateRecipeModal = ({
         status
       } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Cần quyền truy cập Album', 'Vui lòng cấp quyền truy cập thư viện ảnh để tải ảnh món ăn từ máy của bạn.');
+        showAlert('Cần quyền truy cập Album', 'Vui lòng cấp quyền truy cập thư viện ảnh để tải ảnh món ăn từ máy của bạn.');
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -125,7 +130,7 @@ export const CreateRecipeModal = ({
         setImageUrl(result.assets[0].uri);
       }
     } catch (e) {
-      Alert.alert('Lỗi', 'Không thể mở thư viện ảnh: ' + String(e));
+      showAlert('Lỗi', 'Không thể mở thư viện ảnh: ' + String(e));
     }
   };
   const pickMainVideoFromLibrary = async () => {
@@ -134,7 +139,7 @@ export const CreateRecipeModal = ({
         status
       } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Cần quyền truy cập Album', 'Vui lòng cấp quyền truy cập thư viện để tải video giới thiệu món ăn từ máy của bạn.');
+        showAlert('Cần quyền truy cập Album', 'Vui lòng cấp quyền truy cập thư viện để tải video giới thiệu món ăn từ máy của bạn.');
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -146,7 +151,7 @@ export const CreateRecipeModal = ({
         setVideoUrl(result.assets[0].uri);
       }
     } catch (e) {
-      Alert.alert('Lỗi', 'Không thể mở thư viện video: ' + String(e));
+      showAlert('Lỗi', 'Không thể mở thư viện video: ' + String(e));
     }
   };
   const pickStepImageFromLibrary = async index => {
@@ -155,7 +160,7 @@ export const CreateRecipeModal = ({
         status
       } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Cần quyền truy cập', 'Vui lòng cấp quyền mở album ảnh để chọn ảnh cho bước này.');
+        showAlert('Cần quyền truy cập', 'Vui lòng cấp quyền mở album ảnh để chọn ảnh cho bước này.');
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -167,7 +172,7 @@ export const CreateRecipeModal = ({
         updateStepField(index, 'image', result.assets[0].uri);
       }
     } catch (e) {
-      Alert.alert('Lỗi', 'Không thể chọn ảnh: ' + String(e));
+      showAlert('Lỗi', 'Không thể chọn ảnh: ' + String(e));
     }
   };
   const pickStepVideoFromLibrary = async index => {
@@ -176,7 +181,7 @@ export const CreateRecipeModal = ({
         status
       } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Cần quyền truy cập', 'Vui lòng cấp quyền mở album để chọn video cho bước này.');
+        showAlert('Cần quyền truy cập', 'Vui lòng cấp quyền mở album để chọn video cho bước này.');
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -188,14 +193,14 @@ export const CreateRecipeModal = ({
         updateStepField(index, 'videoUrl', result.assets[0].uri);
       }
     } catch (e) {
-      Alert.alert('Lỗi', 'Không thể chọn video: ' + String(e));
+      showAlert('Lỗi', 'Không thể chọn video: ' + String(e));
     }
   };
 
   // Ingredients handlers
   const addIngredientRow = () => {
     setIngredients(prev => [...prev, {
-      id: Date.now().toString(),
+      id: makeId('i'),
       name: '',
       amount: '',
       unit: 'muỗng'
@@ -242,62 +247,89 @@ export const CreateRecipeModal = ({
     }
   };
   const handleSave = () => {
-    if (!title.trim()) {
-      Alert.alert('Chưa nhập tên món', 'Vui lòng nhập tên món ăn của bạn nhé!');
+    const errors = [];
+    const cleanTitle = title.trim();
+    if (!cleanTitle) errors.push('Nhập tên món ăn.');
+    const prep = parseIntInRange(prepTime, 0, 1440);
+    const cook = parseIntInRange(cookTime, 0, 1440);
+    const portions = parseIntInRange(servings, 1, 50);
+    if (prep === null) errors.push('Thời gian sơ chế phải là số phút từ 0 đến 1440.');
+    if (cook === null) errors.push('Thời gian nấu phải là số phút từ 0 đến 1440.');
+    if (prep !== null && cook !== null && prep + cook === 0) errors.push('Tổng thời gian sơ chế + nấu phải lớn hơn 0 phút.');
+    if (portions === null) errors.push('Khẩu phần phải từ 1 đến 50 người.');
+    const validIngredients = ingredients
+      .filter(i => (i.name || '').trim() !== '')
+      .map((i, idx) => ({ ...i, id: i.id || `i${idx + 1}`, name: i.name.trim(), amount: String(i.amount ?? '').trim() || 'Vừa đủ', unit: String(i.unit ?? '').trim() }));
+    if (validIngredients.length === 0) errors.push('Thêm ít nhất 1 nguyên liệu có tên.');
+    const seenNames = new Set();
+    validIngredients.forEach(i => {
+      const key = normalizeVi(i.name);
+      if (seenNames.has(key)) errors.push(`Nguyên liệu "${i.name}" bị nhập trùng.`);
+      seenNames.add(key);
+    });
+    // A step is kept only if it has instructions; a default title alone is not a real step
+    const filledSteps = steps.filter(s => (s.instruction || '').trim() !== '');
+    if (filledSteps.length === 0) errors.push('Thêm ít nhất 1 bước nấu có nội dung hướng dẫn.');
+    const validSteps = [];
+    filledSteps.forEach((s, idx) => {
+      const minutesText = String(s.timerMinutes ?? '').trim();
+      const minutes = minutesText ? parseIntInRange(minutesText, 1, 600) : null;
+      if (minutesText && minutes === null) errors.push(`Bước ${idx + 1}: hẹn giờ phải là số phút từ 1 đến 600.`);
+      validSteps.push({
+        stepNumber: idx + 1,
+        title: (s.title || '').trim() || `Bước ${idx + 1}`,
+        instruction: s.instruction.trim(),
+        image: s.image?.trim() || undefined,
+        videoUrl: s.videoUrl?.trim() || undefined,
+        timerSeconds: minutes ? minutes * 60 : null,
+        tip: s.tip?.trim() ? s.tip.trim() : undefined
+      });
+    });
+    if (errors.length) {
+      showAlert('Chưa thể lưu công thức', errors.map(e => `• ${e}`).join('\n'));
       return;
     }
-    const validIngredients = ingredients.filter(i => i.name.trim() !== '');
-    if (validIngredients.length === 0) {
-      Alert.alert('Thiếu nguyên liệu', 'Vui lòng nhập ít nhất 1 nguyên liệu!');
-      return;
-    }
-    const validSteps = steps.map((s, idx) => ({
-      stepNumber: idx + 1,
-      title: s.title || `Bước ${idx + 1}`,
-      instruction: s.instruction || 'Thực hiện công đoạn này theo ý thích của bạn.',
-      image: s.image?.trim() || undefined,
-      videoUrl: s.videoUrl?.trim() || undefined,
-      timerSeconds: s.timerMinutes ? parseInt(s.timerMinutes, 10) * 60 : null,
-      tip: s.tip ? s.tip : undefined
-    }));
-    const finalImageUrl = imageUrl.trim() || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80';
+    const finalImageUrl = imageUrl.trim() || DEFAULT_RECIPE_IMAGE;
+    const payload = {
+      title: cleanTitle,
+      description: description.trim() || 'Món ăn tự sáng tạo thơm ngon bổ dưỡng.',
+      imageUrl: finalImageUrl,
+      videoUrl: videoUrl.trim() || undefined,
+      category,
+      prepTimeMinutes: prep,
+      cookTimeMinutes: cook,
+      servings: portions,
+      difficulty,
+      ingredients: validIngredients,
+      steps: validSteps
+    };
     if (editingRecipe) {
-      updateRecipe({
-        ...editingRecipe,
-        title,
-        description: description || 'Món ăn tự sáng tạo thơm ngon bổ dưỡng.',
-        imageUrl: finalImageUrl,
-        videoUrl: videoUrl.trim() || undefined,
-        category,
-        prepTimeMinutes: parseInt(prepTime, 10) || 10,
-        cookTimeMinutes: parseInt(cookTime, 10) || 15,
-        servings: parseInt(servings, 10) || 2,
-        difficulty,
-        ingredients: validIngredients,
-        steps: validSteps
-      });
-      Alert.alert('Thành công! 🎉', 'Công thức của bạn đã được cập nhật.');
+      updateRecipe({ ...editingRecipe, ...payload });
+      showAlert('Thành công! 🎉', 'Công thức của bạn đã được cập nhật.');
     } else {
-      addRecipe({
-        title,
-        description: description || 'Món ăn tự sáng tạo thơm ngon bổ dưỡng.',
-        imageUrl: finalImageUrl,
-        videoUrl: videoUrl.trim() || undefined,
-        category,
-        prepTimeMinutes: parseInt(prepTime, 10) || 10,
-        cookTimeMinutes: parseInt(cookTime, 10) || 15,
-        servings: parseInt(servings, 10) || 2,
-        difficulty,
-        ingredients: validIngredients,
-        steps: validSteps,
-        colorAccent: HeronColors.brand
-      });
-      Alert.alert('Thành công! 🎉', 'Món mới đã được lưu vào danh sách của bạn.');
+      addRecipe({ ...payload, colorAccent: HeronColors.brand });
+      showAlert('Thành công! 🎉', 'Món mới đã được lưu vào mục "Của tôi → Tự tạo".');
     }
     resetForm();
     onClose();
   };
-  return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} onRequestClose={onClose}>
+  const handleRequestClose = () => {
+    const isDirty = editingRecipe
+      ? title.trim() !== editingRecipe.title
+        || ingredients.length !== editingRecipe.ingredients.length
+        || steps.length !== editingRecipe.steps.length
+      : title.trim() !== '' || ingredients.some(i => (i.name || '').trim()) || steps.some(s => (s.instruction || '').trim());
+    if (!isDirty) return onClose();
+    return confirmAction({
+      title: 'Bỏ thay đổi?',
+      message: 'Nội dung bạn vừa nhập sẽ không được lưu.',
+      confirmText: 'Bỏ thay đổi',
+      cancelText: 'Tiếp tục sửa',
+      destructive: true,
+      onConfirm: onClose
+    });
+  };
+  return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} onRequestClose={handleRequestClose}>
       <SafeAreaView style={{
       flex: 1,
       backgroundColor: HeronColors.canvas
@@ -308,7 +340,7 @@ export const CreateRecipeModal = ({
         <View style={styles.container}>
           {/* Top Bar Header */}
           <View style={styles.topBar}>
-            <Pressable onPress={onClose} style={styles.cancelBtn}>
+            <Pressable onPress={handleRequestClose} style={styles.cancelBtn}>
               <Text style={styles.cancelText}>Hủy</Text>
             </Pressable>
             <View style={styles.headerTitleWrap}>

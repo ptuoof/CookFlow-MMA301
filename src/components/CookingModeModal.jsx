@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { TimerCircle } from './ui/TimerCircle';
@@ -7,31 +7,62 @@ import { StepVideoPlayer } from './ui/StepVideoPlayer';
 import { AppleButton } from './ui/AppleButton';
 import { AiChefChatModal } from './AiChefChatModal';
 import * as Speech from 'expo-speech';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import { useRecipes } from '../context/RecipeContext';
+import { confirmAction } from '../utils/dialog';
+import { formatTimer } from './ui/TimerCircle';
+const KEEP_AWAKE_TAG = 'cookflow-cooking-mode';
+const pad2 = n => String(n).padStart(2, '0');
 export const CookingModeModal = ({
   recipe,
   visible,
-  onClose
+  onClose,
+  initialStepIndex = null
 }) => {
+  const { cookingTimer, timerSecondsLeft, clearTimer, settings, setActiveRecipeForCooking } = useRecipes();
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isCelebrationVisible, setIsCelebrationVisible] = useState(false);
   const [viewMode, setViewMode] = useState('video');
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
-  const currentStep = recipe?.steps[currentStepIndex];
-  const totalSteps = recipe?.steps.length ?? 0;
-  const progressPercent = Math.round((currentStepIndex + 1) / totalSteps * 100);
-  const isLastStep = currentStepIndex === totalSteps - 1;
+  const totalSteps = recipe?.steps?.length ?? 0;
+  const safeStepIndex = Math.min(currentStepIndex, Math.max(0, totalSteps - 1));
+  const currentStep = recipe?.steps?.[safeStepIndex];
+  const progressPercent = totalSteps ? Math.round((safeStepIndex + 1) / totalSteps * 100) : 0;
+  const isLastStep = safeStepIndex === totalSteps - 1;
+  const timerOfThisRecipe = cookingTimer && cookingTimer.recipeId === recipe?.id ? cookingTimer : null;
   useEffect(() => {
     setCurrentStepIndex(0);
     setVoiceEnabled(false);
+    setIsCelebrationVisible(false);
+    setViewMode('video');
   }, [recipe?.id]);
+  // Reopened from the floating timer: jump to the step that owns the timer
+  useEffect(() => {
+    if (visible && initialStepIndex != null && initialStepIndex < totalSteps) {
+      setCurrentStepIndex(initialStepIndex);
+    }
+  }, [visible, initialStepIndex, totalSteps]);
+  // Optional custom timer tab only applies to the step where it was opened
+  useEffect(() => {
+    setViewMode('video');
+  }, [currentStepIndex]);
+  // Keep the screen on while cooking (setting in Cài đặt)
+  useEffect(() => {
+    if (!visible || !settings.keepAwake || Platform.OS === 'web') return undefined;
+    Promise.resolve(activateKeepAwakeAsync(KEEP_AWAKE_TAG)).catch(() => {});
+    return () => {
+      Promise.resolve().then(() => deactivateKeepAwake(KEEP_AWAKE_TAG)).catch(() => {});
+    };
+  }, [visible, settings.keepAwake]);
   useEffect(() => {
     if (visible && voiceEnabled && currentStep) {
       Speech.stop();
       Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, { language: 'vi-VN' });
     }
     return () => { Speech.stop(); };
-  }, [visible, voiceEnabled, recipe?.id, currentStepIndex]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, voiceEnabled, recipe?.id, safeStepIndex]);
   const speakCurrentStep = () => {
     if (!currentStep) return;
     Speech.stop();
@@ -40,31 +71,38 @@ export const CookingModeModal = ({
   if (!recipe || !currentStep) return null;
   const handleNext = () => {
     if (isLastStep) {
+      Speech.stop();
       setIsCelebrationVisible(true);
     } else {
-      setCurrentStepIndex(prev => prev + 1);
+      setCurrentStepIndex(Math.min(totalSteps - 1, safeStepIndex + 1));
     }
   };
   const handlePrev = () => {
-    if (currentStepIndex > 0) {
-      setCurrentStepIndex(prev => prev - 1);
+    if (safeStepIndex > 0) {
+      setCurrentStepIndex(safeStepIndex - 1);
     }
   };
   const handleExit = () => {
-    Alert.alert('Dừng phiên nấu ăn?', 'Bạn có chắc muốn thoát chế độ Cooking Assistant này không?', [{
-      text: 'Tiếp tục nấu',
-      style: 'cancel'
-    }, {
-      text: 'Thoát ra',
-      style: 'destructive',
-      onPress: () => {
+    const timerActive = timerOfThisRecipe && timerOfThisRecipe.status !== 'done';
+    confirmAction({
+      title: 'Tạm rời chế độ nấu?',
+      message: timerActive
+        ? `Timer "${timerOfThisRecipe.stepTitle}" vẫn tiếp tục chạy (${formatTimer(timerSecondsLeft)}). Bạn có thể mở lại từ thanh timer ở màn hình chính.`
+        : 'Tiến độ bước hiện tại được giữ lại cho đến khi bạn chọn món khác.',
+      confirmText: 'Rời đi',
+      cancelText: 'Tiếp tục nấu',
+      onConfirm: () => {
+        Speech.stop();
         onClose();
       }
-    }]);
+    });
   };
   const handleFinishCooking = () => {
+    Speech.stop();
+    if (timerOfThisRecipe) clearTimer();
     setIsCelebrationVisible(false);
     setCurrentStepIndex(0);
+    setActiveRecipeForCooking(null);
     onClose();
   };
   return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} onRequestClose={handleExit}>
@@ -83,7 +121,7 @@ export const CookingModeModal = ({
             <View style={styles.phaseBadge}>
               <View style={styles.livePulse} />
               <Text style={styles.phaseText}>
-                GIAI ĐOẠN 0{currentStepIndex + 1} // 0{totalSteps}
+                GIAI ĐOẠN {pad2(safeStepIndex + 1)} // {pad2(totalSteps)}
               </Text>
             </View>
 
@@ -159,11 +197,7 @@ export const CookingModeModal = ({
                   </Text>
                 </View>
 
-                <TimerCircle key={`timer_${recipe.id}_${currentStepIndex}`} initialSeconds={currentStep.timerSeconds || 180} stepTitle={currentStep.title} onFinish={() => {
-              Alert.alert('⏰ ĐÃ HẾT GIỜ BƯỚC NẤU!', `Bạn đã hoàn thành giai đoạn "${currentStep.title}". Hãy chuyển sang bước tiếp theo để đảm bảo hương vị chuẩn nhất!`, [{
-                text: 'ĐÃ HIỂU ✓'
-              }]);
-            }} />
+                <TimerCircle key={`timer_${recipe.id}_${safeStepIndex}`} recipe={recipe} stepIndex={safeStepIndex} defaultSeconds={currentStep.timerSeconds || 180} />
               </View> : null}
           </View>
 
@@ -174,7 +208,7 @@ export const CookingModeModal = ({
 
         {/* Bottom Navigation Dock */}
         <View style={styles.footer}>
-          <Pressable onPress={handlePrev} disabled={currentStepIndex === 0} style={[styles.navBtn, styles.prevBtn, currentStepIndex === 0 && styles.btnDisabled]}>
+          <Pressable onPress={handlePrev} disabled={safeStepIndex === 0} style={[styles.navBtn, styles.prevBtn, safeStepIndex === 0 && styles.btnDisabled]}>
             <Text style={styles.prevBtnText}>‹ BƯỚC TRƯỚC</Text>
           </Pressable>
 
@@ -198,13 +232,16 @@ export const CookingModeModal = ({
 
               <View style={styles.celebrationMeta}>
                 <Text style={styles.celebrationMetaText}>
-                  TRẠNG THÁI: KIỂM SOÁT THỜI GIAN & VIDEO CHUẨN XÁC 100%
+                  {totalSteps} BƯỚC • {(recipe.prepTimeMinutes || 0) + (recipe.cookTimeMinutes || 0)} PHÚT THEO CÔNG THỨC
                 </Text>
               </View>
 
               <AppleButton title="XÁC NHẬN & QUAY VỀ TRANG CHỦ" size="lg" variant="primary" onPress={handleFinishCooking} style={{
             width: '100%'
           }} />
+              <Pressable onPress={() => setIsCelebrationVisible(false)} style={styles.celebrationBack}>
+                <Text style={styles.celebrationBackText}>‹ Quay lại bước cuối</Text>
+              </Pressable>
             </View>
           </View>}
 
@@ -213,6 +250,17 @@ export const CookingModeModal = ({
     </Modal>;
 };
 const styles = StyleSheet.create({
+  celebrationBack: {
+    marginTop: 12,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  celebrationBackText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: HeronColors.granite
+  },
   container: {
     flex: 1,
     backgroundColor: HeronColors.canvas

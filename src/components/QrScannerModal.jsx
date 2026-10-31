@@ -1,17 +1,19 @@
 import React, { useRef, useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Image, Alert, Platform } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Image, Platform } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { AppleButton } from './ui/AppleButton';
 import { useRecipes } from '../context/RecipeContext';
 import { decodeRecipeFromQr } from '../services/recipeQr';
+import { confirmAction, showAlert } from '../utils/dialog';
 export const QrScannerModal = ({
   visible,
   onClose,
   onImported
 }) => {
   const {
-    addRecipe
+    addRecipe,
+    findDuplicateRecipe
   } = useRecipes();
   const [permission, requestPermission] = useCameraPermissions();
   const [mode, setMode] = useState('camera');
@@ -52,14 +54,26 @@ export const QrScannerModal = ({
     setScanError('');
     isHandlingScanRef.current = false;
   };
-  const handleSave = () => {
+  const saveImported = () => {
     const saved = addRecipe(scannedRecipe);
     handleClose();
+    if (!saved) return;
     if (onImported) onImported(saved);
     // Wait for the sheet to dismiss so the alert is not torn down with it on iOS
     setTimeout(() => {
-      Alert.alert('Đã nhận món! 🎉', `"${saved.title}" đã được lưu vào mục Món của tôi.`);
+      showAlert('Đã nhận món! 🎉', `"${saved.title}" đã được lưu vào mục Của tôi → Tự tạo.`);
     }, 450);
+  };
+  const handleSave = () => {
+    const duplicate = findDuplicateRecipe(scannedRecipe);
+    if (!duplicate) return saveImported();
+    return confirmAction({
+      title: 'Món này đã có trong máy',
+      message: `"${duplicate.title}" có cùng tên và nguyên liệu. Bạn vẫn muốn lưu thêm một bản?`,
+      confirmText: 'Vẫn lưu bản mới',
+      cancelText: 'Không lưu',
+      onConfirm: saveImported
+    });
   };
   const renderPreview = () => <View style={styles.previewCard}>
       <Image source={{

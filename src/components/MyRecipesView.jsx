@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Image, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Image } from 'react-native';
+import { confirmAction } from '../utils/dialog';
+import { totalMinutes } from '../utils/recipeModel';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { AppleBadge } from './ui/AppleBadge';
 import { useRecipes } from '../context/RecipeContext';
@@ -10,20 +12,21 @@ export const MyRecipesView = ({
   const {
     recipes,
     favoriteIds,
-    deleteRecipe
+    deleteRecipe,
+    cookingTimer
   } = useRecipes();
   const [activeTab, setActiveTab] = useState('favorites');
   const favoriteRecipes = recipes.filter(r => favoriteIds.includes(r.id));
   const customRecipes = recipes.filter(r => r.isCustom);
   const handleDelete = recipe => {
-    Alert.alert('Xóa công thức?', `Bạn có chắc muốn xóa công thức "${recipe.title}" vĩnh viễn không?`, [{
-      text: 'Hủy',
-      style: 'cancel'
-    }, {
-      text: 'Xóa vĩnh viễn',
-      style: 'destructive',
-      onPress: () => deleteRecipe(recipe.id)
-    }]);
+    const isCooking = cookingTimer?.recipeId === recipe.id;
+    confirmAction({
+      title: 'Xóa công thức?',
+      message: `Công thức "${recipe.title}" sẽ bị xóa vĩnh viễn${isCooking ? ' và timer đang chạy của món này sẽ dừng' : ''}.`,
+      confirmText: 'Xóa vĩnh viễn',
+      destructive: true,
+      onConfirm: () => deleteRecipe(recipe.id)
+    });
   };
   const currentList = activeTab === 'favorites' ? favoriteRecipes : customRecipes;
   return <View style={styles.container}>
@@ -71,7 +74,7 @@ export const MyRecipesView = ({
                 <View style={styles.badgeRow}>
                   <AppleBadge label={item.category} variant="coral" />
                   <Text style={styles.timeText}>
-                    ⏱ {item.prepTimeMinutes + item.cookTimeMinutes}P
+                    ⏱ {totalMinutes(item)}P
                   </Text>
                 </View>
 
@@ -103,7 +106,7 @@ export const MyRecipesView = ({
             </Pressable>)}
 
         <View style={{
-        height: 110
+        height: 170
       }} />
       </ScrollView>
     </View>;

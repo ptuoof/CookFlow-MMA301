@@ -1,75 +1,76 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { HeronColors, Radius, HeronShadow } from '../../constants/theme';
 import { useRecipes } from '../../context/RecipeContext';
+import { confirmAction } from '../../utils/dialog';
+
+export const formatTimer = totalSeconds => {
+  const safe = Math.max(0, Math.round(totalSeconds || 0));
+  const hours = Math.floor(safe / 3600);
+  const mins = Math.floor((safe % 3600) / 60);
+  const secs = safe % 60;
+  const mmss = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  return hours > 0 ? `${hours}:${mmss}` : mmss;
+};
+
+/**
+ * Countdown for one recipe step. The single app-wide timer lives in RecipeContext;
+ * this component only shows it when it belongs to this step, so moving between steps
+ * never resets or hijacks a timer that is still running for another step.
+ */
 export const TimerCircle = ({
-  initialSeconds,
-  onFinish,
-  autoStart = false,
-  stepTitle = ''
+  recipe,
+  stepIndex,
+  defaultSeconds
 }) => {
-  const { cookingTimer, setCookingTimer, activeRecipeForCooking } = useRecipes();
-  const [isCompleted, setIsCompleted] = useState(false);
-  const secondsLeft = cookingTimer?.secondsLeft ?? initialSeconds;
-  const isRunning = cookingTimer?.running ?? false;
-  useEffect(() => {
-    const sameTimerSession = cookingTimer?.recipeId === activeRecipeForCooking?.id
-      && cookingTimer?.stepTitle === stepTitle;
-    if (!sameTimerSession) {
-      setCookingTimer({ recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: autoStart, initialSeconds });
+  const { cookingTimer, timerSecondsLeft, startStepTimer, pauseTimer, resumeTimer, addTimerMinute, clearTimer } = useRecipes();
+  const isOwn = !!cookingTimer && cookingTimer.recipeId === recipe?.id && cookingTimer.stepIndex === stepIndex;
+  const status = isOwn ? cookingTimer.status : 'idle';
+  const isRunning = status === 'running';
+  const isCompleted = status === 'done';
+  const secondsLeft = isOwn ? timerSecondsLeft : defaultSeconds;
+  const otherActive = !isOwn && cookingTimer && cookingTimer.status !== 'done' ? cookingTimer : null;
+
+  const start = () => startStepTimer({ recipe, stepIndex, seconds: defaultSeconds });
+  const handleMain = () => {
+    if (isRunning) return pauseTimer();
+    if (status === 'paused') return resumeTimer();
+    if (otherActive) {
+      return confirmAction({
+        title: 'Thay timer đang chạy?',
+        message: `Timer "${otherActive.stepTitle}" (${otherActive.recipeTitle}) còn ${formatTimer(timerSecondsLeft)}. Bắt đầu timer bước này sẽ dừng timer kia.`,
+        confirmText: 'Bắt đầu bước này',
+        cancelText: 'Giữ timer cũ',
+        onConfirm: start
+      });
     }
-    setIsCompleted(false);
-  }, [initialSeconds, activeRecipeForCooking?.id, stepTitle]);
-  useEffect(() => {
-    if (secondsLeft === 0 && cookingTimer?.recipeId === activeRecipeForCooking?.id) {
-      setIsCompleted(true);
-      if (onFinish) onFinish();
-    }
-  }, [secondsLeft]);
-  const toggleRunning = () => {
-    if (isCompleted) {
-      setCookingTimer({ recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: true, initialSeconds });
-      setIsCompleted(false);
-      return;
-    }
-    setCookingTimer(timer => timer ? { ...timer, running: !timer.running } : { recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: true, initialSeconds });
+    return start();
   };
-  const resetTimer = () => {
-    setCookingTimer({ recipeId: activeRecipeForCooking?.id ?? '', recipeTitle: activeRecipeForCooking?.title ?? '', stepTitle, secondsLeft: initialSeconds, running: false, initialSeconds });
-    setIsCompleted(false);
+  const handleReset = () => {
+    if (isOwn) clearTimer();
   };
-  const addOneMinute = () => {
-    setCookingTimer(timer => timer ? { ...timer, secondsLeft: timer.secondsLeft + 60, initialSeconds: timer.initialSeconds + 60 } : timer);
-    setIsCompleted(false);
-  };
-  const formatTime = totalSeconds => {
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = totalSeconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+
   return <View style={styles.container}>
-      {/* Vòng Timer tối giản phong cách Heron AI */}
       <View style={[styles.circleOuter, isCompleted ? styles.circleCompleted : isRunning ? styles.circleRunning : styles.circleIdle]}>
         <View style={styles.badgeState}>
           <Text style={[styles.badgeStateText, isRunning && styles.badgeStateActive]}>
-            {isCompleted ? '✓ HOÀN TẤT' : isRunning ? '● ĐANG NẤU' : 'CHỜ KÍCH HOẠT'}
+            {isCompleted ? '✓ HOÀN TẤT' : isRunning ? '● ĐANG NẤU' : status === 'paused' ? 'TẠM DỪNG' : 'CHỜ KÍCH HOẠT'}
           </Text>
         </View>
 
-        <Text style={[styles.timeText, isCompleted && styles.timeCompletedText]}>
-          {formatTime(secondsLeft)}
+        <Text style={[styles.timeText, isCompleted && styles.timeCompletedText]} accessibilityLiveRegion="polite">
+          {formatTimer(secondsLeft)}
         </Text>
 
         <Text style={styles.subtext}>
-          {isCompleted ? 'Đã kết thúc giai đoạn này' : isRunning ? 'Đang đếm ngược chính xác' : 'Nhấn Bắt đầu khi sẵn sàng'}
+          {isCompleted ? 'Đã kết thúc giai đoạn này' : isRunning ? 'Vẫn đếm khi bạn rời màn hình' : status === 'paused' ? 'Nhấn Tiếp tục để chạy tiếp' : 'Nhấn Bắt đầu khi sẵn sàng'}
         </Text>
       </View>
 
-      {/* Điều khiển dạng Pill kiểu Heron AI */}
       <View style={styles.controlsRow}>
-        <Pressable onPress={resetTimer} style={({
+        <Pressable accessibilityRole="button" disabled={!isOwn} onPress={handleReset} style={({
         pressed
-      }) => [styles.controlBtn, styles.btnOutline, {
+      }) => [styles.controlBtn, styles.btnOutline, !isOwn && styles.controlDisabled, {
         transform: [{
           scale: pressed ? 0.96 : 1
         }]
@@ -77,7 +78,7 @@ export const TimerCircle = ({
           <Text style={styles.btnOutlineText}>Đặt lại</Text>
         </Pressable>
 
-        <Pressable onPress={toggleRunning} style={({
+        <Pressable accessibilityRole="button" onPress={isCompleted ? start : handleMain} style={({
         pressed
       }) => [styles.controlBtn, styles.mainBtn, isCompleted ? styles.mainBtnRestart : isRunning ? styles.mainBtnPause : styles.mainBtnStart, {
         transform: [{
@@ -85,13 +86,13 @@ export const TimerCircle = ({
         }]
       }]}>
           <Text style={styles.mainBtnText}>
-            {isCompleted ? 'Lặp lại' : isRunning ? 'Tạm dừng' : 'Bắt đầu'}
+            {isCompleted ? 'Lặp lại' : isRunning ? 'Tạm dừng' : status === 'paused' ? 'Tiếp tục' : 'Bắt đầu'}
           </Text>
         </Pressable>
 
-        <Pressable onPress={addOneMinute} style={({
+        <Pressable accessibilityRole="button" disabled={!isOwn} onPress={addTimerMinute} style={({
         pressed
-      }) => [styles.controlBtn, styles.btnOutline, {
+      }) => [styles.controlBtn, styles.btnOutline, !isOwn && styles.controlDisabled, {
         transform: [{
           scale: pressed ? 0.96 : 1
         }]
@@ -99,6 +100,10 @@ export const TimerCircle = ({
           <Text style={styles.btnOutlineText}>+1 Phút</Text>
         </Pressable>
       </View>
+
+      {otherActive ? <Text style={styles.notice}>
+          Đang có timer khác: "{otherActive.stepTitle}" • {formatTimer(timerSecondsLeft)}
+        </Text> : null}
     </View>;
 };
 const styles = StyleSheet.create({
@@ -163,13 +168,27 @@ const styles = StyleSheet.create({
   },
   controlsRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
     marginTop: 20
   },
+  controlDisabled: {
+    opacity: 0.4
+  },
+  notice: {
+    marginTop: 12,
+    maxWidth: 300,
+    fontSize: 12,
+    lineHeight: 17,
+    color: HeronColors.granite,
+    textAlign: 'center'
+  },
   controlBtn: {
+    minHeight: 44,
     paddingVertical: 11,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center'
@@ -186,7 +205,7 @@ const styles = StyleSheet.create({
     color: HeronColors.primary
   },
   mainBtn: {
-    minWidth: 115,
+    minWidth: 110,
     ...HeronShadow.brandGlow
   },
   mainBtnStart: {

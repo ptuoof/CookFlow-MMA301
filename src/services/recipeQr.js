@@ -52,25 +52,30 @@ const toCompact = (recipe, level) => {
     })
   };
   if (recipe.calories) compact.cal = recipe.calories;
-  if (level.image && recipe.imageUrl) compact.i = recipe.imageUrl;
-  if (level.video && recipe.videoUrl) compact.v = recipe.videoUrl;
+  // Local file:// or content:// media only exists on the sender's phone — never worth the bytes
+  const isWeb = url => typeof url === 'string' && /^https?:\/\//i.test(url);
+  if (level.image && isWeb(recipe.imageUrl)) compact.i = recipe.imageUrl;
+  if (level.video && isWeb(recipe.videoUrl)) compact.v = recipe.videoUrl;
   return compact;
 };
 
 /**
  * Encodes a recipe into a QR-ready string.
- * Returns { payload, bytes, truncated } — truncated is true when some detail was dropped.
+ * Returns { payload, bytes, truncated, tooLarge } — truncated is true when any detail was dropped
+ * (video, tips or shortened text); tooLarge when even the smallest level exceeds QR_MAX_BYTES
+ * (the QR may then be hard to scan, the text code still works).
  */
 export const encodeRecipeForQr = recipe => {
   let payload = '';
+  let bytes = 0;
   for (let i = 0; i < DETAIL_LEVELS.length; i++) {
     payload = QR_PREFIX + JSON.stringify(toCompact(recipe, DETAIL_LEVELS[i]));
-    const bytes = utf8ByteLength(payload);
-    if (bytes <= QR_MAX_BYTES || i === DETAIL_LEVELS.length - 1) {
-      return { payload, bytes, truncated: i > 1 };
+    bytes = utf8ByteLength(payload);
+    if (bytes <= QR_MAX_BYTES) {
+      return { payload, bytes, truncated: i > 0, tooLarge: false };
     }
   }
-  return { payload, bytes: utf8ByteLength(payload), truncated: true };
+  return { payload, bytes, truncated: true, tooLarge: true };
 };
 
 const cleanStr = (value, fallback = '') => {

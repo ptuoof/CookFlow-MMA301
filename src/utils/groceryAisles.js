@@ -1,3 +1,8 @@
+// Groups shopping items by supermarket aisle using whole-word Vietnamese keywords.
+// Matching is word-based (see containsPhrase) so short keywords like "ốc", "cua", "ớt"
+// no longer match inside other words ("nước", "của", "bột"), and "đ" is handled.
+import { containsPhrase, normalizeVi } from './text';
+
 const AISLES = [
   { id: 'produce', label: 'Rau củ & trái cây' },
   { id: 'meat', label: 'Thịt & gia cầm' },
@@ -8,38 +13,34 @@ const AISLES = [
   { id: 'other', label: 'Khác' }
 ];
 
-const normalize = value => value
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .toLowerCase();
+// Order matters: the first rule whose keyword matches wins.
+// More specific phrases ("dầu ăn", "cà rốt", "bột mì") come before generic words.
+const RULES = [
+  ['dairy', ['trung', 'sua tuoi', 'sua dac', 'sua chua', 'sua bot', 'pho mai', 'kem tuoi', 'bo lat', 'bo nhat']],
+  ['pantry', ['nuoc tuong', 'nuoc mam', 'nuoc cot dua', 'nuoc dua', 'dau olive', 'dau o liu', 'dau an', 'dau me', 'dau hao', 'dau dieu',
+    'duong', 'muoi', 'hat nem', 'bot ngot', 'bot nem', 'tieu den', 'tieu xay', 'gelatin', 'giam', 'siro', 'tra tui', 'tra xanh', 'me trang', 'me rang',
+    'mat ong', 'gia vi', 'xot', 'sot', 'tuong ot', 'tuong ca', 'bot bap', 'bot nang', 'cacao', 'ca phe', 'vani', 'que', 'hoi', 'ngu vi huong']],
+  ['bakery', ['banh mi', 'bot mi', 'yen mach', 'ngu coc', 'mi soi', 'mi y', 'mi trung', 'bun kho', 'bun tuoi', 'pho kho', 'banh pho', 'gao', 'nep', 'banh trang', 'banh quy']],
+  ['produce', ['ca rot', 'ca chua', 'ca tim', 'ca le', 'ca phao', 'ca tim', 'dua leo', 'dua chuot', 'dua hau', 'dua luoi']],
+  ['seafood', ['tom', 'ca hoi', 'ca ngu', 'ca basa', 'ca loc', 'ca thu', 'ca ro', 'ca chem', 'ca dieu hong', 'muc', 'bach tuoc', 'ngheu', 'so diep', 'cua', 'oc', 'hau', 'ghe', 'so', 'hai san']],
+  ['meat', ['thit', 'thit bo', 'bap bo', 'bo phi le', 'bo vien', 'than bo', 'bo uc', 'bo bit tet', 'heo', 'lon', 'ga', 'vit', 'cuu', 'suon', 'ba roi', 'ribeye', 'xuc xich', 'lap xuong', 'cha lua', 'gio lua', 'thit nguoi']],
+  ['dairy', ['sua', 'pho mai', 'phomai', 'bo lat', 'bo nhat', 'kem tuoi', 'kem whipping', 'whipping', 'sua chua', 'trung', 'yogurt', 'bo']],
+  ['produce', ['rau', 'xa lach', 'cai', 'hanh', 'toi', 'ot', 'gung', 'rieng', 'sa', 'xoai', 'cam', 'chanh', 'bi', 'dau', 'khoai', 'nam', 'bap', 'ngo',
+    'chuoi', 'tao', 'dua', 'bo sap', 'thom', 'ngo ri', 'rau mui', 'hung que', 'la', 'dau hu', 'dau phu', 'gia', 'tieu xanh', 'muop', 'su su', 'bo xoi', 'trai cay', 'dao', 'nho', 'le', 'qua']],
+  ['pantry', ['tieu', 'bot', 'dau', 'nuoc loc']]
+];
 
-const matchesAny = (value, terms) => terms.some(term => value.includes(term));
+// Words that look like a keyword but mean something else in an ingredient name.
+const EXCLUDE = { meat: ['bo lat', 'bo nhat', 'bo sap', 'bo xoi', 'bo dau'], dairy: ['bo sap', 'bo xoi'] };
 
 export const getGroceryAisle = ingredientName => {
-  const name = normalize(ingredientName || '');
-
-  if (matchesAny(name, ['ca rot', 'ca chua', 'ca tim', 'ca le'])) {
-    return AISLES[0];
-  }
-  if (name === 'tom' || name.startsWith('tom ') || name.includes(', tom')
-    || matchesAny(name, ['ca hoi', 'ca ngu', 'ca basa', 'muc', 'bach tuoc', 'ngheu', 'so diep', 'cua', 'oc', 'ca loc', 'ca thu'])
-    || name === 'ca ro' || name.startsWith('ca ro,') || name.startsWith('ca ro ')) {
-    return AISLES[2];
-  }
-  if (name.startsWith('thit ') || matchesAny(name, ['bo uc', 'ribeye', 'suon', 'uc ga', 'ga ta', 'thit nguoi', 'xuc xich', 'ba roi'])) {
-    return AISLES[1];
-  }
-  if (matchesAny(name, ['sua', 'pho mai', 'phomai', 'bo lat', 'kem tuoi', 'sua chua', 'trung'])) {
-    return AISLES[3];
-  }
-  if (matchesAny(name, ['banh mi', 'bot mi', 'yen mach', 'ngu coc', 'mi soi', 'bun kho', 'pho kho', 'gao'])) {
-    return AISLES[4];
-  }
-  if (matchesAny(name, ['rau', 'xa lach', 'ca chua', 'hanh', 'toi', 'ot', 'gung', 'sa tuoi', 'sa ', 'bo sap', 'xoai', 'cam', 'chanh', 'dua leo', 'dau ', 'khoai', 'nam ', 'nam,', 'ca rot', 'bi xanh', 'tieu xanh'])) {
-    return AISLES[0];
-  }
-  if (matchesAny(name, ['nuoc tuong', 'nuoc mam', 'nuoc loc', 'nuoc cot dua', 'dau olive', 'dau an', 'duong', 'muoi', 'tieu', 'bot ', 'gelatin', 'giam', 'siro', 'tra tui', 'me trang', 'mat ong', 'xot'])) {
-    return AISLES[5];
+  const name = normalizeVi(ingredientName);
+  if (!name) return AISLES[6];
+  for (const [aisleId, keywords] of RULES) {
+    const excluded = (EXCLUDE[aisleId] || []).some(word => containsPhrase(name, word));
+    if (!excluded && keywords.some(keyword => containsPhrase(name, keyword))) {
+      return AISLES.find(aisle => aisle.id === aisleId);
+    }
   }
   return AISLES[6];
 };
