@@ -14,10 +14,10 @@ import { ShoppingListModal } from '../components/ShoppingListModal';
 import { QrScannerModal } from '../components/QrScannerModal';
 import { PantryFinderModal } from '../components/PantryFinderModal';
 import { FloatingTimerWidget } from '../components/ui/FloatingTimerWidget';
-import { matchesSearch } from '../utils/text';
+import { DIET_TAGS, TIME_FILTERS, filterRecipes, userAllergensIn } from '../utils/dietary';
 import { hasTimer, hasVideo, totalMinutes } from '../utils/recipeModel';
 import { confirmAction, showAlert } from '../utils/dialog';
-import { CATEGORIES } from '../types/recipe';
+import { CATEGORIES, DIFFICULTIES } from '../types/recipe';
 export default function AppMainScreen() {
   const {
     recipes,
@@ -37,9 +37,15 @@ export default function AppMainScreen() {
     hasSeenOnboarding,
     isHydrated,
     shoppingList,
-    cookingTimer,
-    getRecipeById
+    getRecipeById,
+    settings
   } = useRecipes();
+  // Extra explore filters (screen-local): max total minutes, difficulty, diet tag
+  const [maxMinutes, setMaxMinutes] = useState(null);
+  const [difficultyFilter, setDifficultyFilter] = useState(null);
+  const [tagFilter, setTagFilter] = useState(null);
+  const [showAllergenRecipes, setShowAllergenRecipes] = useState(false);
+  const allergies = useMemo(() => settings.allergies || [], [settings.allergies]);
   // Navigation tab state: 'explore' | 'myRecipes'
   const [currentTab, setCurrentTab] = useState('explore');
 
@@ -58,16 +64,36 @@ export default function AppMainScreen() {
 
   // Filtered recipes
   // Diacritic-insensitive: "pho bo" finds "Phở bò", "duong" finds "Đường"
-  const filteredRecipes = useMemo(() => {
-    return recipes.filter(recipe => {
-      const matchCat = selectedCategory === 'Tất cả' || recipe.category === selectedCategory;
-      const matchQuery = matchesSearch([recipe.title, recipe.description, recipe.category, ...(recipe.ingredients || []).map(i => i.name)], searchQuery);
-      return matchCat && matchQuery;
-    });
-  }, [recipes, selectedCategory, searchQuery]);
-  const featuredRecipe = recipes.find(r => !r.isCustom) || recipes[0];
+  const hideAllergens = settings.hideAllergenRecipes && !showAllergenRecipes;
+  const { visible: filteredRecipes, hiddenByAllergy } = useMemo(() => filterRecipes(recipes, {
+    category: selectedCategory,
+    query: searchQuery,
+    maxMinutes,
+    difficulty: difficultyFilter,
+    tag: tagFilter,
+    allergies,
+    hideAllergens
+  }), [recipes, selectedCategory, searchQuery, maxMinutes, difficultyFilter, tagFilter, allergies, hideAllergens]);
+  // "Món nổi bật hôm nay" changes every day, never suggesting a dish with the user's allergens
+  const featuredRecipe = useMemo(() => {
+    const candidates = recipes.filter(r => !r.isCustom && !userAllergensIn(r, allergies).length);
+    const pool = candidates.length ? candidates : recipes;
+    const dayIndex = Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 86400000);
+    return pool[dayIndex % Math.max(1, pool.length)];
+  }, [recipes, allergies]);
   const pendingShoppingCount = shoppingList.filter(item => !item.checked).length;
-  const isFiltering = searchQuery.trim() !== '' || selectedCategory !== 'Tất cả';
+  const hasExtraFilters = maxMinutes !== null || difficultyFilter !== null || tagFilter !== null;
+  const isFiltering = searchQuery.trim() !== '' || selectedCategory !== 'Tất cả' || hasExtraFilters;
+  const renderFilterChip = (label, active, onPress) => <Pressable key={label} accessibilityRole="button" accessibilityState={{ selected: active }} onPress={onPress} style={[styles.categoryChip, active && styles.categoryChipActive]}>
+      <Text style={[styles.categoryChipText, active && styles.categoryChipTextActive]}>{label}</Text>
+    </Pressable>;
+  const clearFilters = () => {
+    setSearchQuery('');
+    setSelectedCategory('Tất cả');
+    setMaxMinutes(null);
+    setDifficultyFilter(null);
+    setTagFilter(null);
+  };
   // iOS cannot present a modal or alert while another modal is still dismissing
   const afterModalDismiss = fn => {
     if (Platform.OS === 'ios') setTimeout(fn, 450);
@@ -114,12 +140,14 @@ export default function AppMainScreen() {
     }
     switchCookingTo(recipe, restart);
   };
-  const reopenTimerStep = () => {
-    const recipe = cookingTimer ? getRecipeById(cookingTimer.recipeId) : null;
+  // Opens Cooking Mode on the step that owns the tapped timer
+  const reopenTimerStep = timer => {
+    const recipe = timer ? getRecipeById(timer.recipeId) : null;
     if (!recipe) return;
+    const stepIndex = Math.max(0, recipe.steps.findIndex(step => step.id === timer.stepId));
     switchCookingTo(recipe, () => {
-      if (activeRecipeForCooking?.id === recipe.id) setCookingStep(cookingTimer.stepIndex);
-      else startCookingSession(recipe, { stepIndex: cookingTimer.stepIndex });
+      if (activeRecipeForCooking?.id === recipe.id) setCookingStep(stepIndex);
+      else startCookingSession(recipe, { stepIndex });
       setIsCookingVisible(true);
     });
   };
@@ -244,6 +272,22 @@ export default function AppMainScreen() {
           })}
             </ScrollView>
 
+            {/* Time / difficulty / diet filters — tap again to turn one off */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
+              {TIME_FILTERS.map(minutes => renderFilterChip(`⏱ ≤ ${minutes} phút`, maxMinutes === minutes, () => setMaxMinutes(current => current === minutes ? null : minutes)))}
+              {DIFFICULTIES.map(level => renderFilterChip(`🎯 ${level}`, difficultyFilter === level, () => setDifficultyFilter(current => current === level ? null : level)))}
+              {DIET_TAGS.map(tag => renderFilterChip(`🏷 ${tag}`, tagFilter === tag, () => setTagFilter(current => current === tag ? null : tag)))}
+            </ScrollView>
+
+            {hiddenByAllergy > 0 || (showAllergenRecipes && allergies.length && settings.hideAllergenRecipes) ? <View style={styles.allergyNotice}>
+                <Text style={styles.allergyNoticeText}>
+                  {showAllergenRecipes ? 'Đang hiện cả món có thể chứa chất bạn dị ứng.' : `Đã ẩn ${hiddenByAllergy} món có thể chứa chất bạn dị ứng.`}
+                </Text>
+                <Pressable accessibilityRole="button" hitSlop={8} onPress={() => setShowAllergenRecipes(value => !value)}>
+                  <Text style={styles.allergyNoticeAction}>{showAllergenRecipes ? 'ẨN LẠI' : 'HIỆN'}</Text>
+                </Pressable>
+              </View> : null}
+
             {/* Featured Hero Card (Architectural Poster) */}
             {!isFiltering && featuredRecipe ? <Pressable onPress={() => setSelectedRecipeForDetail(featuredRecipe)} style={({
           pressed
@@ -318,15 +362,13 @@ export default function AppMainScreen() {
                 <Text style={styles.noResultText}>
                   Hãy thử từ khóa khác hoặc chuyển sang danh mục khác.
                 </Text>
-                {isFiltering ? <Pressable onPress={() => {
-              setSearchQuery('');
-              setSelectedCategory('Tất cả');
-            }} style={styles.resetFilterBtn}>
+                {isFiltering ? <Pressable onPress={clearFilters} style={styles.resetFilterBtn}>
                     <Text style={styles.resetFilterText}>Xóa bộ lọc</Text>
                   </Pressable> : null}
               </View> : <View style={styles.recipeGrid}>
                 {filteredRecipes.map(item => {
             const isFav = isFavorite(item.id);
+            const itemAllergens = userAllergensIn(item, allergies);
             return <Pressable key={item.id} onPress={() => setSelectedRecipeForDetail(item)} style={({
               pressed
             }) => [styles.recipeCard, {
@@ -365,6 +407,9 @@ export default function AppMainScreen() {
                         <Text style={styles.cardDesc} numberOfLines={2}>
                           {item.description}
                         </Text>
+                        {itemAllergens.length ? <Text style={styles.cardAllergy} numberOfLines={1}>
+                            ⚠ Có thể chứa: {itemAllergens.map(a => a.label).join(', ')}
+                          </Text> : null}
 
                         <View style={styles.cardSpecFooter}>
                           <Text style={styles.cardSpecText}>ĐỘ KHÓ: {item.difficulty.toUpperCase()}</Text>
@@ -465,6 +510,34 @@ export default function AppMainScreen() {
     </SafeAreaView>;
 }
 const styles = StyleSheet.create({
+  allergyNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: Radius.md,
+    backgroundColor: '#FFF4E6'
+  },
+  allergyNoticeText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#9C3D00'
+  },
+  allergyNoticeAction: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: HeronColors.brand
+  },
+  cardAllergy: {
+    marginTop: 6,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#C2410C'
+  },
   resumeCard: {
     flexDirection: 'row',
     alignItems: 'center',

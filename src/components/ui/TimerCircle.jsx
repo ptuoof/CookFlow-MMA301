@@ -2,7 +2,8 @@ import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { HeronColors, Radius, HeronShadow } from '../../constants/theme';
 import { useRecipes } from '../../context/RecipeContext';
-import { confirmAction } from '../../utils/dialog';
+import { showAlert } from '../../utils/dialog';
+import { MAX_TIMERS } from '../../utils/timers';
 
 export const formatTimer = totalSeconds => {
   const safe = Math.max(0, Math.round(totalSeconds || 0));
@@ -14,40 +15,36 @@ export const formatTimer = totalSeconds => {
 };
 
 /**
- * Countdown for one recipe step. The single app-wide timer lives in RecipeContext;
- * this component only shows it when it belongs to this step, so moving between steps
- * never resets or hijacks a timer that is still running for another step.
+ * Countdown for one recipe step. Timers live in RecipeContext (one per step, several can run
+ * together), so moving between steps never resets a timer that is still running elsewhere.
  */
 export const TimerCircle = ({
   recipe,
   stepIndex,
   defaultSeconds
 }) => {
-  const { cookingTimer, timerSecondsLeft, startStepTimer, pauseTimer, resumeTimer, addTimerMinute, clearTimer } = useRecipes();
-  const isOwn = !!cookingTimer && cookingTimer.recipeId === recipe?.id && cookingTimer.stepIndex === stepIndex;
-  const status = isOwn ? cookingTimer.status : 'idle';
+  const { timers, getStepTimer, startStepTimer, pauseTimer, resumeTimer, addTimerMinute, clearTimer } = useRecipes();
+  const step = recipe?.steps?.[stepIndex];
+  const own = step ? getStepTimer(recipe.id, step.id) : null;
+  const isOwn = !!own;
+  const status = own ? own.status : 'idle';
   const isRunning = status === 'running';
   const isCompleted = status === 'done';
-  const secondsLeft = isOwn ? timerSecondsLeft : defaultSeconds;
-  const otherActive = !isOwn && cookingTimer && cookingTimer.status !== 'done' ? cookingTimer : null;
+  const secondsLeft = own ? own.secondsLeft : defaultSeconds;
+  const othersActive = timers.filter(timer => timer.id !== own?.id && timer.status !== 'done');
 
-  const start = () => startStepTimer({ recipe, stepIndex, seconds: defaultSeconds });
-  const handleMain = () => {
-    if (isRunning) return pauseTimer();
-    if (status === 'paused') return resumeTimer();
-    if (otherActive) {
-      return confirmAction({
-        title: 'Thay timer đang chạy?',
-        message: `Timer "${otherActive.stepTitle}" (${otherActive.recipeTitle}) còn ${formatTimer(timerSecondsLeft)}. Bắt đầu timer bước này sẽ dừng timer kia.`,
-        confirmText: 'Bắt đầu bước này',
-        cancelText: 'Giữ timer cũ',
-        onConfirm: start
-      });
+  const start = () => {
+    if (!startStepTimer({ recipe, stepIndex, seconds: defaultSeconds })) {
+      showAlert('Đã đủ timer', `Có thể chạy cùng lúc tối đa ${MAX_TIMERS} timer. Hãy dừng hoặc đặt lại một timer khác trước.`);
     }
+  };
+  const handleMain = () => {
+    if (isRunning) return pauseTimer(own.id);
+    if (status === 'paused') return resumeTimer(own.id);
     return start();
   };
   const handleReset = () => {
-    if (isOwn) clearTimer();
+    if (own) clearTimer(own.id);
   };
 
   return <View style={styles.container}>
@@ -90,7 +87,7 @@ export const TimerCircle = ({
           </Text>
         </Pressable>
 
-        <Pressable accessibilityRole="button" disabled={!isOwn} onPress={addTimerMinute} style={({
+        <Pressable accessibilityRole="button" disabled={!isOwn} onPress={() => own && addTimerMinute(own.id)} style={({
         pressed
       }) => [styles.controlBtn, styles.btnOutline, !isOwn && styles.controlDisabled, {
         transform: [{
@@ -101,8 +98,8 @@ export const TimerCircle = ({
         </Pressable>
       </View>
 
-      {otherActive ? <Text style={styles.notice}>
-          Đang có timer khác: "{otherActive.stepTitle}" • {formatTimer(timerSecondsLeft)}
+      {othersActive.length ? <Text style={styles.notice}>
+          Đang chạy song song: {othersActive.map(timer => `${timer.stepTitle} (${formatTimer(timer.secondsLeft)})`).join(' • ')}
         </Text> : null}
     </View>;
 };

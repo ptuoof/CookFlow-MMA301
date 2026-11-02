@@ -93,3 +93,20 @@ Kiểm thử: `npm run test:logic` — 10 nhóm (thêm step id, timer theo bư�
 | 36 | Cảnh báo trùng khi tạo | Tạo món / bản sao trùng tên + bộ nguyên liệu với món đã có → hỏi trước khi lưu. |
 
 Kiểm thử: `npm run test:logic` — 14 nhóm (thêm đơn vị, gộp giỏ, tủ lạnh, phiên nấu), đều đạt. ESLint (cấu hình Expo, chạy tạm) không báo biến chưa khai báo trong code mới. Vẫn chưa chạy được Expo/Metro trên máy rà soát → cần thử tay: tick "đã mua" rồi mở món dùng nguyên liệu đó; nấu dở rồi tắt app, mở lại; chọn 4 người ở chi tiết rồi xem bảng nguyên liệu trong Cooking Mode; tạo bản sao món có sẵn rồi Hủy (không được tạo món).
+
+## 8. Đợt 4 — nhóm P2 (02/11/2026)
+
+| # | Hạng mục | Thay đổi |
+|---|---|---|
+| 37 | Lịch sử nấu + đánh giá | Hoàn thành món → lưu vào lịch sử (`@cookflow_history_v1`, tối đa 200 lần): khẩu phần, thời điểm, đánh giá 1–5 sao, ghi chú. Tab mới "Của tôi → ĐÃ NẤU"; màn chi tiết hiện "Đã nấu N lần • gần nhất … • ★ trung bình". Xóa món vẫn giữ lịch sử. |
+| 38 | Chất dị ứng | `src/utils/dietary.js`: nhận diện 8 nhóm (hải sản, đậu phộng, các loại hạt, sữa, trứng, gluten, đậu nành, mè) theo tên nguyên liệu, có loại trừ nhầm lẫn ("cà" ≠ cá, "óc chó" ≠ ốc, sữa đậu nành ≠ sữa, "me" ≠ mè). Luôn hiển thị là "có thể chứa". |
+| 39 | Dị ứng của tôi | Cài đặt → chọn chất dị ứng. Trang Khám phá ẩn món liên quan (có nút HIỆN, có công tắc tắt), thẻ món ghi "⚠ Có thể chứa…", màn chi tiết cảnh báo đỏ, AI được dặn tránh gợi ý các chất đó. "Món nổi bật hôm nay" đổi theo ngày và bỏ qua món chứa chất dị ứng. |
+| 40 | Tag chế độ ăn + bộ lọc | Tác giả gắn tag (Chay, Eat clean, Ít đường, Giàu đạm, Không cay, Cho trẻ em) trong form; tag đi kèm QR. Khám phá có thêm bộ lọc thời gian (≤15/30/60 phút), độ khó, tag; "Xóa bộ lọc" xóa tất cả. |
+| 41 | Nhiều timer song song | Tối đa 4 timer, mỗi bước một timer (id `recipeId:stepId`). Bắt đầu timer bước khác không còn dừng timer đang chạy. Widget nổi hiện timer sắp hết giờ nhất kèm "+N". Timer cũ (`@cookflow_timer_v1`) được chuyển sang danh sách mới (`@cookflow_timers_v2`). |
+| 42 | Thông báo hệ thống | `expo-notifications`: mỗi timer đang chạy có một thông báo đặt lịch theo `endAt`, tự hủy/đặt lại khi tạm dừng, cộng phút, đặt lại. Đang mở app thì không hiện banner (đã có cảnh báo trong app). Công tắc "Thông báo khi hết giờ" trong Cài đặt. |
+| 43 | API key an toàn hơn | Trên iOS/Android key Gemini lưu trong keychain/keystore (`expo-secure-store`); key cũ trong AsyncStorage tự chuyển sang một lần rồi xóa bản cũ. Web vẫn dùng localStorage. Prompt AI coi nội dung công thức (có thể đến từ QR của người khác) là dữ liệu, không phải chỉ dẫn. |
+| 44 | Sao lưu / khôi phục / xóa | Cài đặt → "Dữ liệu trên máy": xuất tệp `.json` (món tự tạo, yêu thích, đi chợ, tủ lạnh, lịch sử, cài đặt; không gồm món có sẵn và API key), khôi phục từ tệp (kiểm tra định dạng/phiên bản, làm sạch từng bản ghi, hỏi trước khi THAY THẾ), xóa toàn bộ dữ liệu. Ảnh/video chọn từ máy không nằm trong tệp. |
+
+Gói mới: `expo-notifications@~57.0.20`, `expo-secure-store@~57.0.4` (đã thêm plugin vào `app.json`). Cả hai cần **build lại ứng dụng native** (dev build / `expo prebuild`) nếu không chạy bằng Expo Go.
+
+Kiểm thử: `npm run test:logic` — 19 nhóm (thêm lịch sử, chất dị ứng, bộ lọc, timer song song, sao lưu), đều đạt. Thử tay cần làm: chạy 2 timer ở 2 bước rồi đóng app chờ thông báo; chọn "Trứng" trong dị ứng rồi xem Khám phá; nấu xong chấm sao rồi xem tab Đã nấu; xuất sao lưu → xóa toàn bộ → khôi phục.

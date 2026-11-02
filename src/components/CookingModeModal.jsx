@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { TimerCircle } from './ui/TimerCircle';
@@ -13,6 +13,7 @@ import { confirmAction } from '../utils/dialog';
 import { formatTimer } from './ui/TimerCircle';
 import { scaleAmount } from '../utils/quantity';
 import { pantryItemsUsedBy } from '../utils/pantry';
+import { NOTE_MAX_LENGTH } from '../utils/history';
 const KEEP_AWAKE_TAG = 'cookflow-cooking-mode';
 const pad2 = n => String(n).padStart(2, '0');
 // The step being cooked lives in the context's cooking session (persisted), not in this screen
@@ -22,10 +23,13 @@ export const CookingModeModal = ({
   onClose
 }) => {
   const {
-    cookingTimer, timerSecondsLeft, clearTimer, settings,
+    timers, getStepTimer, clearRecipeTimers, settings,
     cookingSession, cookingStepIndex, setCookingStep, endCookingSession,
-    pantryIngredients, removePantryIngredients
+    pantryIngredients, removePantryIngredients, recordCooking
   } = useRecipes();
+  // Rating (1–5) and note saved to the cooking history when the dish is done
+  const [rating, setRating] = useState(0);
+  const [note, setNote] = useState('');
   const [isCelebrationVisible, setIsCelebrationVisible] = useState(false);
   const [viewMode, setViewMode] = useState('video');
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
@@ -38,7 +42,8 @@ export const CookingModeModal = ({
   const currentStep = recipe?.steps?.[safeStepIndex];
   const progressPercent = totalSteps ? Math.round((safeStepIndex + 1) / totalSteps * 100) : 0;
   const isLastStep = safeStepIndex === totalSteps - 1;
-  const timerOfThisRecipe = cookingTimer && cookingTimer.recipeId === recipe?.id ? cookingTimer : null;
+  const recipeTimers = timers.filter(timer => timer.recipeId === recipe?.id);
+  const currentStepTimer = recipe && currentStep ? getStepTimer(recipe.id, currentStep.id) : null;
   // Servings chosen on the detail screen: ingredient amounts and the AI follow them
   const servings = cookingSession?.servings ?? recipe?.servings ?? 1;
   const ratio = servings / Math.max(1, recipe?.servings || 1);
@@ -49,6 +54,8 @@ export const CookingModeModal = ({
     setViewMode('video');
     setShowIngredients(false);
     setUsedUp({});
+    setRating(0);
+    setNote('');
   }, [recipe?.id]);
   // Optional custom timer tab only applies to the step where it was opened
   useEffect(() => {
@@ -86,10 +93,10 @@ export const CookingModeModal = ({
       }
     };
     // Leaving a step whose timer is still counting is allowed, but never by accident
-    if (timerOfThisRecipe?.status === 'running' && timerOfThisRecipe.stepIndex === safeStepIndex) {
+    if (currentStepTimer?.status === 'running') {
       confirmAction({
         title: 'Timer bước này vẫn đang chạy',
-        message: `Còn ${formatTimer(timerSecondsLeft)}. Timer vẫn tiếp tục đếm và sẽ báo khi hết giờ.`,
+        message: `Còn ${formatTimer(currentStepTimer.secondsLeft)}. Timer vẫn tiếp tục đếm và sẽ báo khi hết giờ.`,
         confirmText: isLastStep ? 'Vẫn hoàn thành' : 'Sang bước tiếp',
         cancelText: 'Ở lại',
         onConfirm: advance
@@ -104,11 +111,11 @@ export const CookingModeModal = ({
     }
   };
   const handleExit = () => {
-    const timerActive = timerOfThisRecipe && timerOfThisRecipe.status !== 'done';
+    const activeTimers = recipeTimers.filter(timer => timer.status !== 'done');
     confirmAction({
       title: 'Tạm rời chế độ nấu?',
-      message: timerActive
-        ? `Timer "${timerOfThisRecipe.stepTitle}" vẫn tiếp tục chạy (${formatTimer(timerSecondsLeft)}). Bạn có thể mở lại từ thanh timer ở màn hình chính.`
+      message: activeTimers.length
+        ? `${activeTimers.map(timer => `Timer "${timer.stepTitle}" (${formatTimer(timer.secondsLeft)})`).join(', ')} vẫn tiếp tục chạy. Bạn có thể mở lại từ thanh timer ở màn hình chính.`
         : `Tiến độ (bước ${safeStepIndex + 1}/${totalSteps}) được lưu lại, kể cả khi tắt ứng dụng. Mở lại từ thẻ "Đang nấu dở" ở màn hình chính.`,
       confirmText: 'Rời đi',
       cancelText: 'Tiếp tục nấu',
@@ -120,10 +127,13 @@ export const CookingModeModal = ({
   };
   const handleFinishCooking = () => {
     Speech.stop();
-    if (timerOfThisRecipe) clearTimer();
+    clearRecipeTimers(recipe.id);
     removePantryIngredients(usedPantryItems.filter(name => usedUp[name]));
+    recordCooking({ recipe, servings, startedAt: cookingSession?.startedAt, rating, note });
     setIsCelebrationVisible(false);
     setUsedUp({});
+    setRating(0);
+    setNote('');
     endCookingSession();
     onClose();
   };
@@ -260,6 +270,8 @@ export const CookingModeModal = ({
 
         {/* Overlay Chúc mừng hoàn thành món ăn */}
         {isCelebrationVisible && <View style={styles.celebrationOverlay}>
+            {/* Scrolls on small screens: rating, note and pantry choices make the card tall */}
+            <ScrollView style={styles.celebrationScroll} contentContainerStyle={styles.celebrationScrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <View style={styles.celebrationCard}>
               <View style={styles.celebrationIconBadge}>
                 <Text style={styles.celebrationIcon}>✓</Text>
@@ -273,6 +285,17 @@ export const CookingModeModal = ({
                 <Text style={styles.celebrationMetaText}>
                   {totalSteps} BƯỚC • {(recipe.prepTimeMinutes || 0) + (recipe.cookTimeMinutes || 0)} PHÚT THEO CÔNG THỨC
                 </Text>
+              </View>
+
+              {/* Rating + note, saved to "Của tôi → Đã nấu" */}
+              <View style={styles.usedUpBox}>
+                <Text style={styles.usedUpTitle}>Món lần này thế nào?</Text>
+                <View style={styles.ratingRow}>
+                  {[1, 2, 3, 4, 5].map(value => <Pressable key={value} accessibilityRole="button" accessibilityLabel={`${value} sao`} accessibilityState={{ selected: rating === value }} hitSlop={4} onPress={() => setRating(current => current === value ? 0 : value)} style={styles.starBtn}>
+                      <Text style={[styles.starText, value <= rating && styles.starTextActive]}>★</Text>
+                    </Pressable>)}
+                </View>
+                <TextInput style={styles.noteInput} placeholder="Ghi chú cho lần sau (ví dụ: bớt đường, nấu thêm 5 phút)…" placeholderTextColor={HeronColors.disable} value={note} onChangeText={setNote} maxLength={NOTE_MAX_LENGTH} multiline />
               </View>
 
               {usedPantryItems.length ? <View style={styles.usedUpBox}>
@@ -292,6 +315,7 @@ export const CookingModeModal = ({
                 <Text style={styles.celebrationBackText}>‹ Quay lại bước cuối</Text>
               </Pressable>
             </View>
+            </ScrollView>
           </View>}
 
         <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={recipe} currentStep={currentStep} servings={servings} />
@@ -385,6 +409,36 @@ const styles = StyleSheet.create({
   usedUpHint: {
     fontSize: 12,
     color: HeronColors.granite
+  },
+  ratingRow: {
+    flexDirection: 'row',
+    gap: 4
+  },
+  starBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  starText: {
+    fontSize: 30,
+    color: HeronColors.border
+  },
+  starTextActive: {
+    color: '#F59F00'
+  },
+  noteInput: {
+    minHeight: 56,
+    maxHeight: 96,
+    borderWidth: 1,
+    borderColor: HeronColors.border,
+    borderRadius: Radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 14,
+    color: HeronColors.inkPrimary,
+    backgroundColor: HeronColors.cardAlt,
+    textAlignVertical: 'top'
   },
   celebrationBack: {
     marginTop: 12,
@@ -664,6 +718,14 @@ const styles = StyleSheet.create({
     padding: 24,
     zIndex: 999,
     elevation: 20
+  },
+  celebrationScroll: {
+    width: '100%'
+  },
+  celebrationScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingVertical: 12
   },
   celebrationCard: {
     width: '100%',

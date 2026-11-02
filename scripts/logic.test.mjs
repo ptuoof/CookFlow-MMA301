@@ -157,3 +157,88 @@ test('cooking session step follows the step id', () => {
   assert.equal(getSessionStepIndex({ stepId: 'zz', stepIndex: 9 }, edited), 1); // clamped
   assert.equal(getSessionStepIndex(null, recipe), 0);
 });
+const { makeHistoryEntry, recipeStats, sanitizeHistory, formatCookedDay } = await import(`${R}/utils/history.js`);
+const { detectAllergens, userAllergensIn, filterRecipes, normalizeTags } = await import(`${R}/utils/dietary.js`);
+const { restoreTimers, finishDueTimers, sortTimers, MAX_TIMERS } = await import(`${R}/utils/timers.js`);
+const { buildBackup, parseBackup } = await import(`${R}/utils/backup.js`);
+
+test('cooking history and stats', () => {
+  const recipe = { id: 'r1', title: 'Phở', servings: 2 };
+  const a = makeHistoryEntry({ recipe, servings: 4, startedAt: 1000, finishedAt: 5000, rating: 5, note: ' ngon ' });
+  const b = makeHistoryEntry({ recipe, servings: 2, finishedAt: 9000, rating: 0 });
+  assert.deepEqual([a.rating, a.note, a.servings, b.rating], [5, 'ngon', 4, null]);
+  assert.equal(makeHistoryEntry({ recipe: null }), null);
+  const stats = recipeStats([b, a, makeHistoryEntry({ recipe: { id: 'x', title: 'X' }, rating: 1 })], 'r1');
+  assert.deepEqual(stats, { count: 2, lastAt: 9000, avgRating: 5 });
+  assert.deepEqual(recipeStats([], 'r1'), { count: 0, lastAt: null, avgRating: null });
+  // Storage/backup data is cleaned and sorted newest first
+  const clean = sanitizeHistory([{ recipeId: 'r1', finishedAt: 1, rating: 9 }, { recipeId: 'r1', finishedAt: 3 }, { finishedAt: 2 }, null]);
+  assert.deepEqual(clean.map(e => [e.finishedAt, e.rating]), [[3, null], [1, null]]);
+  const now = new Date(2026, 10, 2, 20).getTime();
+  assert.equal(formatCookedDay(new Date(2026, 10, 2, 8).getTime(), now), 'Hôm nay');
+  assert.equal(formatCookedDay(new Date(2026, 10, 1, 23).getTime(), now), 'Hôm qua');
+  assert.equal(formatCookedDay(new Date(2026, 9, 1).getTime(), now), '01/10/2026');
+});
+test('allergen detection avoids false positives', () => {
+  const ids = names => detectAllergens({ ingredients: names.map(name => ({ name })) }).map(a => a.id);
+  assert.deepEqual(ids(['Tôm sú', 'Nước mắm']), ['seafood']);
+  assert.deepEqual(ids(['Cà chua', 'Cà rốt', 'Cá hồi phi lê']), ['seafood']); // "cà" is not fish
+  assert.deepEqual(ids(['Hạt óc chó']), ['nuts']); // walnut, not snail
+  assert.deepEqual(ids(['Sữa đậu nành']), ['soy']); // soy milk is not dairy
+  assert.deepEqual(ids(['Trứng gà', 'Nước tương']), ['egg', 'gluten', 'soy']);
+  assert.deepEqual(ids(['Mè rang', 'Me chua']), ['sesame']); // tamarind is not sesame
+  assert.deepEqual(ids(['Thịt bò', 'Hành tây', 'Muối']), []);
+  INITIAL_RECIPES.forEach(r => detectAllergens(r));
+  assert.deepEqual(normalizeTags(['chay', 'Không cay', 'lạ']), ['Chay', 'Không cay']);
+});
+test('explore filters', () => {
+  const recipes = [
+    { id: 'a', title: 'Gỏi tôm', category: 'Món nhanh ⚡', difficulty: 'Dễ', prepTimeMinutes: 10, cookTimeMinutes: 0, tags: ['Eat clean'], ingredients: [{ name: 'Tôm' }] },
+    { id: 'b', title: 'Bò kho', category: 'Món chính 🍲', difficulty: 'Khó', prepTimeMinutes: 30, cookTimeMinutes: 90, tags: [], ingredients: [{ name: 'Thịt bò' }] }
+  ];
+  const ids = opts => filterRecipes(recipes, opts).visible.map(r => r.id);
+  assert.deepEqual(ids({ maxMinutes: 15 }), ['a']);
+  assert.deepEqual(ids({ difficulty: 'Khó' }), ['b']);
+  assert.deepEqual(ids({ tag: 'Eat clean' }), ['a']);
+  assert.deepEqual(ids({ query: 'bo' }), ['b']);
+  const hidden = filterRecipes(recipes, { allergies: ['seafood'], hideAllergens: true });
+  assert.deepEqual([hidden.visible.map(r => r.id), hidden.hiddenByAllergy], [['b'], 1]);
+  assert.equal(filterRecipes(recipes, { allergies: ['seafood'], hideAllergens: false }).visible.length, 2);
+  assert.equal(userAllergensIn(recipes[0], ['seafood']).length, 1);
+});
+test('parallel timers', () => {
+  const now = 100000;
+  const legacy = { recipeId: 'r', stepId: 's2', stepIndex: 1, status: 'running', endAt: now - 1 };
+  const restored = restoreTimers(null, legacy, now);
+  assert.deepEqual([restored.length, restored[0].id, restored[0].status], [1, 'r:s2', 'done']);
+  const list = [
+    { id: 'r:a', recipeId: 'r', stepId: 'a', status: 'running', endAt: now + 5000 },
+    { id: 'r:b', recipeId: 'r', stepId: 'b', status: 'running', endAt: now + 1000 },
+    { id: 'r:c', recipeId: 'r', stepId: 'c', status: 'paused', remainingSeconds: 30 },
+    { id: 'r:a', recipeId: 'r', stepId: 'a', status: 'paused', remainingSeconds: 3 }
+  ];
+  assert.equal(restoreTimers(list, null, now).length, 3); // duplicate ids dropped
+  assert.deepEqual(sortTimers(list.slice(0, 3), now).map(t => t.id), ['r:b', 'r:a', 'r:c']);
+  const { finished, timers } = finishDueTimers(list.slice(0, 3), now + 2000);
+  assert.deepEqual([finished.map(t => t.id), timers.find(t => t.id === 'r:b').status, timers.find(t => t.id === 'r:a').status], [['r:b'], 'done', 'running']);
+  assert.ok(MAX_TIMERS >= 2);
+});
+test('backup round trip and validation', () => {
+  const custom = normalizeRecipe({ id: 'custom_1', isCustom: true, title: 'Món nhà', ingredients: [{ name: 'Bột', amount: '1', unit: 'kg' }], steps: [{ instruction: 'x' }] });
+  const backup = buildBackup({
+    recipes: [custom, normalizeRecipe(INITIAL_RECIPES[0])],
+    favoriteIds: ['rec_01', 'custom_1'],
+    shoppingList: [{ id: 's', name: 'Muối', amount: '1', unit: 'gói', checked: true }, { name: '' }],
+    pantryIngredients: ['Trứng'],
+    settings: { keepAwake: false, allergies: ['egg', 'unknown'], secret: 'x' },
+    cookHistory: [makeHistoryEntry({ recipe: custom, rating: 4 })]
+  });
+  assert.equal(backup.data.recipes.length, 1); // built-in recipes are not exported
+  const { data, summary } = parseBackup(JSON.stringify(backup));
+  assert.deepEqual([summary.recipes, summary.shopping, summary.pantry, summary.history], [1, 1, 1, 1]);
+  assert.deepEqual(data.settings, { keepAwake: false, allergies: ['egg'] }); // unknown keys dropped
+  assert.equal(data.recipes[0].steps[0].id, 's1');
+  assert.throws(() => parseBackup('not json'), /JSON/);
+  assert.throws(() => parseBackup(JSON.stringify({ format: 'other', data: {} })), /không phải/);
+  assert.throws(() => parseBackup(JSON.stringify({ format: 'cookflow-backup', version: 99, data: {} })), /mới hơn/);
+});

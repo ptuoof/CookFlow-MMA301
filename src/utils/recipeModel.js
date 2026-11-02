@@ -2,6 +2,7 @@
 // so every screen can rely on the same shape (no undefined arrays, numbered steps, unique ids).
 import { normalizeVi, tokensOf } from './text';
 import { normalizeUnit } from './units';
+import { normalizeTags } from './dietary';
 import { CATEGORIES } from '../types/recipe';
 import { MINUTES_MAX, SERVINGS_MAX, SERVINGS_MIN, TIMER_SECONDS_MAX } from '../constants/limits';
 
@@ -82,6 +83,7 @@ export const normalizeRecipe = recipe => {
     prepTimeMinutes: num(recipe.prepTimeMinutes, 0, 0, MINUTES_MAX),
     cookTimeMinutes: num(recipe.cookTimeMinutes, 0, 0, MINUTES_MAX),
     servings: num(recipe.servings, 2, SERVINGS_MIN, SERVINGS_MAX),
+    tags: normalizeTags(recipe.tags),
     ingredients,
     steps
   };
