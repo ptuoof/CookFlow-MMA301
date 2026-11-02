@@ -1,14 +1,82 @@
-import React from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Switch } from 'react-native';
+import React, { useState } from 'react';
+import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Switch, Platform } from 'react-native';
 import { AppleColors, Radius, AppleShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
+import { ALLERGENS } from '../utils/dietary';
+import { parseBackup } from '../utils/backup';
+import { pickBackupFileText, saveBackupFile } from '../utils/backupFile';
+import { confirmAction, showAlert } from '../utils/dialog';
 export const SettingsModal = ({
   visible,
   onClose,
   onReopenOnboarding
 }) => {
   // Persisted in RecipeContext and actually used by Cooking Mode / the timer
-  const { settings, updateSettings } = useRecipes();
+  const { settings, updateSettings, exportBackup, restoreBackup, resetAllData } = useRecipes();
+  const [isBusy, setIsBusy] = useState(false);
+  const allergies = settings.allergies || [];
+  const toggleAllergy = id => updateSettings({ allergies: allergies.includes(id) ? allergies.filter(a => a !== id) : [...allergies, id] });
+  const handleExport = async () => {
+    if (isBusy) return;
+    setIsBusy(true);
+    try {
+      const backup = exportBackup();
+      await saveBackupFile(backup);
+      const { recipes, history } = backup.data;
+      if (Platform.OS === 'web') {
+        showAlert('Đã tải bản sao lưu', `${recipes.length} món tự tạo, ${history.length} lần nấu. Ảnh/video chọn từ máy không nằm trong tệp.`);
+      }
+    } catch (e) {
+      showAlert('Không xuất được bản sao lưu', e?.message || 'Vui lòng thử lại.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+  const handleImport = async () => {
+    if (isBusy) return;
+    setIsBusy(true);
+    let text;
+    try {
+      text = await pickBackupFileText();
+    } catch {
+      showAlert('Không mở được tệp', 'Vui lòng chọn lại tệp sao lưu .json.');
+    } finally {
+      setIsBusy(false);
+    }
+    if (!text) return;
+    let parsed;
+    try {
+      parsed = parseBackup(text);
+    } catch (e) {
+      showAlert('Không khôi phục được', e.message);
+      return;
+    }
+    const { summary } = parsed;
+    confirmAction({
+      title: 'Khôi phục bản sao lưu?',
+      message: [
+        `Bản sao lưu có ${summary.recipes} món tự tạo, ${summary.shopping} mục đi chợ, ${summary.pantry} nguyên liệu trong tủ và ${summary.history} lần nấu.`,
+        'Dữ liệu hiện tại trên máy sẽ bị THAY THẾ (công thức có sẵn của ứng dụng giữ nguyên).',
+        summary.localMedia ? `${summary.localMedia} món dùng ảnh từ máy cũ có thể không hiển thị ảnh.` : ''
+      ].filter(Boolean).join('\n\n'),
+      confirmText: 'Khôi phục',
+      destructive: true,
+      onConfirm: () => {
+        restoreBackup(parsed.data);
+        showAlert('Đã khôi phục ✓', 'Dữ liệu từ bản sao lưu đã được áp dụng.');
+      }
+    });
+  };
+  const handleReset = () => confirmAction({
+    title: 'Xóa toàn bộ dữ liệu?',
+    message: 'Mọi món tự tạo, yêu thích, danh sách đi chợ, tủ lạnh, lịch sử nấu và cài đặt sẽ bị xóa vĩnh viễn. Hãy xuất bản sao lưu trước nếu cần.',
+    confirmText: 'Xóa tất cả',
+    destructive: true,
+    onConfirm: () => {
+      resetAllData();
+      showAlert('Đã xóa dữ liệu', 'Ứng dụng đã trở về trạng thái ban đầu.');
+    }
+  });
   const keepAwake = settings.keepAwake;
   const soundEnabled = settings.timerSound;
   const vibrationEnabled = settings.vibration;
@@ -86,6 +154,41 @@ export const SettingsModal = ({
               true: AppleColors.lavender
             }} />
             </View>
+
+            {Platform.OS !== 'web' ? <View style={[styles.settingRow, styles.rowDivider]}>
+                <View style={styles.rowLabelWrap}>
+                  <Text style={styles.rowIcon}>🔕</Text>
+                  <View style={{ flexShrink: 1 }}>
+                    <Text style={styles.rowTitle}>Thông báo khi hết giờ</Text>
+                    <Text style={styles.rowDesc}>Báo cả khi ứng dụng chạy nền hoặc đã đóng</Text>
+                  </View>
+                </View>
+                <Switch value={settings.timerNotifications} onValueChange={value => updateSettings({ timerNotifications: value })} trackColor={{
+                false: '#CED4DA',
+                true: AppleColors.mint
+              }} />
+              </View> : null}
+          </View>
+
+          {/* Group: Dị ứng */}
+          <Text style={styles.groupTitle}>DỊ ỨNG CỦA TÔI</Text>
+          <View style={[styles.groupCard, styles.allergyCard]}>
+            <Text style={styles.rowDesc}>Món có thể chứa các chất đã chọn sẽ được cảnh báo, và AI sẽ tránh gợi ý chúng.</Text>
+            <View style={styles.allergyChips}>
+              {ALLERGENS.map(allergen => {
+              const selected = allergies.includes(allergen.id);
+              return <Pressable key={allergen.id} accessibilityRole="checkbox" accessibilityState={{ checked: selected }} onPress={() => toggleAllergy(allergen.id)} style={[styles.allergyChip, selected && styles.allergyChipActive]}>
+                    <Text style={[styles.allergyChipText, selected && styles.allergyChipTextActive]}>{selected ? '✓ ' : ''}{allergen.label}</Text>
+                  </Pressable>;
+            })}
+            </View>
+            <View style={styles.inlineSwitchRow}>
+              <Text style={[styles.rowTitle, { flexShrink: 1 }]}>Ẩn các món đó ở trang Khám phá</Text>
+              <Switch value={settings.hideAllergenRecipes} onValueChange={value => updateSettings({ hideAllergenRecipes: value })} trackColor={{
+              false: '#CED4DA',
+              true: AppleColors.coral
+            }} />
+            </View>
           </View>
 
           {/* Group: Tủ lạnh & đi chợ */}
@@ -118,6 +221,38 @@ export const SettingsModal = ({
               true: AppleColors.coral
             }} />
             </View>
+          </View>
+
+          {/* Group: Dữ liệu — everything is stored on this device only */}
+          <Text style={styles.groupTitle}>DỮ LIỆU TRÊN MÁY</Text>
+          <View style={styles.groupCard}>
+            <Pressable accessibilityRole="button" disabled={isBusy} onPress={handleExport} style={styles.settingRow}>
+              <View style={styles.rowLabelWrap}>
+                <Text style={styles.rowIcon}>💾</Text>
+                <View style={{ flexShrink: 1 }}>
+                  <Text style={styles.rowTitle}>Xuất bản sao lưu</Text>
+                  <Text style={styles.rowDesc}>Tệp .json gồm món tự tạo, yêu thích, đi chợ, tủ lạnh, lịch sử nấu, cài đặt</Text>
+                </View>
+              </View>
+            </Pressable>
+            <Pressable accessibilityRole="button" disabled={isBusy} onPress={handleImport} style={[styles.settingRow, styles.rowDivider]}>
+              <View style={styles.rowLabelWrap}>
+                <Text style={styles.rowIcon}>📂</Text>
+                <View style={{ flexShrink: 1 }}>
+                  <Text style={styles.rowTitle}>Khôi phục từ bản sao lưu</Text>
+                  <Text style={styles.rowDesc}>Chọn tệp đã xuất trước đó (thay thế dữ liệu hiện tại)</Text>
+                </View>
+              </View>
+            </Pressable>
+            <Pressable accessibilityRole="button" disabled={isBusy} onPress={handleReset} style={[styles.settingRow, styles.rowDivider]}>
+              <View style={styles.rowLabelWrap}>
+                <Text style={styles.rowIcon}>🗑️</Text>
+                <View style={{ flexShrink: 1 }}>
+                  <Text style={[styles.rowTitle, styles.dangerText]}>Xóa toàn bộ dữ liệu</Text>
+                  <Text style={styles.rowDesc}>Đưa ứng dụng về trạng thái ban đầu</Text>
+                </View>
+              </View>
+            </Pressable>
           </View>
 
           {/* Group: Hướng dẫn người dùng */}
@@ -295,6 +430,44 @@ const styles = StyleSheet.create({
   rowDesc: {
     fontSize: 12,
     color: AppleColors.textSecondary
+  },
+  dangerText: {
+    color: '#DC2626'
+  },
+  allergyCard: {
+    paddingVertical: 14,
+    gap: 10
+  },
+  allergyChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8
+  },
+  allergyChip: {
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: AppleColors.cardBorder,
+    justifyContent: 'center'
+  },
+  allergyChipActive: {
+    backgroundColor: AppleColors.coral,
+    borderColor: AppleColors.coral
+  },
+  allergyChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: AppleColors.textPrimary
+  },
+  allergyChipTextActive: {
+    color: '#FFFFFF'
+  },
+  inlineSwitchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12
   },
   rowDivider: {
     borderTopWidth: 1,

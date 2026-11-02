@@ -7,6 +7,7 @@ import { DEFAULT_RECIPE_IMAGE, makeId } from '../utils/recipeModel';
 import { persistMedia } from '../utils/media';
 import { MINUTES_MAX, SERVINGS_MAX, SERVINGS_MIN, TIMER_MINUTES_MAX } from '../constants/limits';
 import { CATEGORIES as ALL_CATEGORIES } from '../types/recipe';
+import { DIET_TAGS, detectAllergens } from '../utils/dietary';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
@@ -28,6 +29,7 @@ const toFormState = recipe => recipe ? {
   cookTime: recipe.cookTimeMinutes.toString(),
   servings: recipe.servings.toString(),
   difficulty: recipe.difficulty,
+  tags: recipe.tags || [],
   ingredients: recipe.ingredients,
   steps: recipe.steps.map(s => ({
     id: s.id,
@@ -48,6 +50,7 @@ const toFormState = recipe => recipe ? {
   cookTime: '15',
   servings: '2',
   difficulty: 'Dễ',
+  tags: [],
   ingredients: [emptyIngredient()],
   steps: [emptyStep('Chuẩn bị nguyên liệu')]
 };
@@ -55,7 +58,7 @@ const toFormState = recipe => recipe ? {
 // Comparable text of everything the user can change; ids and UI-only flags are ignored
 const snapshotOf = form => JSON.stringify([
   form.title, form.description, form.imageUrl, form.videoUrl, form.category,
-  form.prepTime, form.cookTime, form.servings, form.difficulty,
+  form.prepTime, form.cookTime, form.servings, form.difficulty, [...(form.tags || [])].sort(),
   form.ingredients.map(i => [i.name, i.amount, i.unit].map(v => String(v ?? '').trim())),
   form.steps.map(s => [s.title, s.instruction, s.timerMinutes, s.tip, s.image, s.videoUrl].map(v => String(v ?? '').trim()))
 ].map(v => typeof v === 'string' ? v.trim() : v));
@@ -84,6 +87,7 @@ export const CreateRecipeModal = ({
   const [cookTime, setCookTime] = useState('15');
   const [servings, setServings] = useState('2');
   const [difficulty, setDifficulty] = useState('Dễ');
+  const [tags, setTags] = useState([]);
 
   // Ingredients
   const [ingredients, setIngredients] = useState(() => [emptyIngredient()]);
@@ -91,6 +95,8 @@ export const CreateRecipeModal = ({
   // Steps
   const [steps, setSteps] = useState(() => [emptyStep('Chuẩn bị nguyên liệu')]);
   const [isSaving, setIsSaving] = useState(false);
+  // Live preview of allergens found in the ingredient names being typed
+  const detectedAllergens = detectAllergens({ ingredients: ingredients.filter(i => (i.name || '').trim()) });
   // Snapshot of the values the form was opened with, to detect unsaved changes
   const initialSnapshotRef = useRef(snapshotOf(toFormState(null)));
   const applyFormState = form => {
@@ -106,6 +112,7 @@ export const CreateRecipeModal = ({
     setCookTime(form.cookTime);
     setServings(form.servings);
     setDifficulty(form.difficulty);
+    setTags(form.tags || []);
     setIngredients(form.ingredients);
     setSteps(form.steps);
     initialSnapshotRef.current = snapshotOf(form);
@@ -316,6 +323,7 @@ export const CreateRecipeModal = ({
       cookTimeMinutes: cook,
       servings: portions,
       difficulty,
+      tags,
       ingredients: validIngredients,
       steps: validSteps
     };
@@ -352,7 +360,7 @@ export const CreateRecipeModal = ({
   const handleRequestClose = () => {
     // Any edited field counts (amounts, timers, tips, media...), not only the title or row count
     const isDirty = snapshotOf({
-      title, description, imageUrl, videoUrl, category, prepTime, cookTime, servings, difficulty, ingredients, steps
+      title, description, imageUrl, videoUrl, category, prepTime, cookTime, servings, difficulty, tags, ingredients, steps
     }) !== initialSnapshotRef.current;
     if (!isDirty) return onClose();
     return confirmAction({
@@ -579,6 +587,19 @@ export const CreateRecipeModal = ({
                     </Pressable>;
                 })}
               </View>
+
+              <Text style={styles.label}>Chế độ ăn (tùy chọn)</Text>
+              <View style={styles.chipRow}>
+                {DIET_TAGS.map(tag => {
+                  const isSelected = tags.includes(tag);
+                  return <Pressable key={tag} accessibilityRole="checkbox" accessibilityState={{ checked: isSelected }} onPress={() => setTags(prev => isSelected ? prev.filter(t => t !== tag) : [...prev, tag])} style={[styles.chip, isSelected && styles.chipActive]}>
+                      <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>{tag}</Text>
+                    </Pressable>;
+                })}
+              </View>
+              {detectedAllergens.length ? <Text style={styles.allergenHint}>
+                  ⚠ Tự nhận diện từ nguyên liệu — có thể chứa: {detectedAllergens.map(a => a.label).join(', ')}
+                </Text> : null}
             </View>
 
             {/* Card 3: Danh sách nguyên liệu */}
@@ -1107,6 +1128,18 @@ const styles = StyleSheet.create({
   categoryRow: {
     flexDirection: 'row',
     marginVertical: 6
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: 8,
+    marginVertical: 6
+  },
+  allergenHint: {
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#C2410C'
   },
   chip: {
     paddingHorizontal: 12,

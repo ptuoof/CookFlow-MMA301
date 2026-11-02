@@ -4,6 +4,7 @@
 // detail level step by step until the payload fits a QR size phones can scan reliably.
 import { MINUTES_MAX, SERVINGS_MAX, SERVINGS_MIN, TIMER_SECONDS_MAX } from '../constants/limits';
 import { normalizeCategory } from '../utils/recipeModel';
+import { normalizeTags } from '../utils/dietary';
 
 export const QR_PREFIX = 'CF1:';
 export const QR_MAX_BYTES = 1500;
@@ -54,6 +55,7 @@ const toCompact = (recipe, level) => {
     })
   };
   if (recipe.calories) compact.cal = recipe.calories;
+  if (recipe.tags?.length) compact.tg = recipe.tags;
   // Local file:// or content:// media only exists on the sender's phone — never worth the bytes
   const isWeb = url => typeof url === 'string' && /^https?:\/\//i.test(url);
   if (level.image && isWeb(recipe.imageUrl)) compact.i = recipe.imageUrl;
@@ -146,6 +148,7 @@ const buildRecipe = fields => {
     cookTimeMinutes: cleanNum(fields.cookTimeMinutes, 0, MINUTES_MAX),
     servings: Math.max(SERVINGS_MIN, cleanNum(fields.servings, 2, SERVINGS_MAX)),
     calories: cleanNum(fields.calories, 0, 10000) || undefined,
+    tags: normalizeTags(fields.tags),
     difficulty: ['Dễ', 'Vừa', 'Khó'].includes(fields.difficulty) ? fields.difficulty : 'Vừa',
     colorAccent: cleanColor(fields.colorAccent),
     ingredients,
@@ -165,6 +168,7 @@ const fromCompact = c => {
     cookTimeMinutes: c.k,
     servings: c.s,
     calories: c.cal,
+    tags: c.tg,
     difficulty: c.df,
     colorAccent: c.a,
     ingredients: row(c.g).map(g => ({

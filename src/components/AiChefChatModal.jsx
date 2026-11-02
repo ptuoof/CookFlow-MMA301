@@ -6,6 +6,7 @@ import { askSousChef, extractIngredientChanges, getGeminiApiKey, saveGeminiApiKe
 import { buildPersonalVariant, shoppingItemsForChanges } from '../services/recipeVariant';
 import { useRecipes } from '../context/RecipeContext';
 import { showAlert } from '../utils/dialog';
+import { allergenLabel } from '../utils/dietary';
 export const SOUS_CHEF_SUGGESTIONS = [{
   icon: '💡',
   label: 'Thay thế gia vị',
@@ -44,7 +45,8 @@ export const AiChefChatModal = ({
     recipes,
     addRecipe,
     updateRecipe,
-    addToShoppingList
+    addToShoppingList,
+    settings
   } = useRecipes();
   const scrollRef = useRef(null);
   const abortRef = useRef(null);
@@ -112,6 +114,7 @@ export const AiChefChatModal = ({
         recipe,
         currentStep,
         servings,
+        allergies: (settings.allergies || []).map(allergenLabel),
         history,
         question: text,
         signal: controller.signal

@@ -11,6 +11,8 @@ import { showAlert } from '../utils/dialog';
 import { hasTimer, hasVideo, totalMinutes } from '../utils/recipeModel';
 import { SERVINGS_MAX as MAX_SERVINGS } from '../constants/limits';
 import { ingredientsOnHand } from '../utils/pantry';
+import { formatCookedDay, formatRating, recipeStats } from '../utils/history';
+import { detectAllergens } from '../utils/dietary';
 export const RecipeDetailModal = ({
   recipe: recipeProp,
   visible,
@@ -25,7 +27,8 @@ export const RecipeDetailModal = ({
     addToShoppingList,
     getRecipeById,
     pantryIngredients,
-    settings
+    settings,
+    cookHistory
   } = useRecipes();
   const [prefilledCount, setPrefilledCount] = useState(0);
   const [checkedIngredients, setCheckedIngredients] = useState({});
@@ -48,6 +51,10 @@ export const RecipeDetailModal = ({
   }, [recipe?.id]);
   if (!recipe) return null;
   const ratio = currentServings / Math.max(1, recipe.servings);
+  const stats = recipeStats(cookHistory, recipe.id);
+  const allergens = detectAllergens(recipe);
+  const myAllergies = new Set(settings.allergies || []);
+  const declared = allergens.filter(found => myAllergies.has(found.id));
   const readyCount = recipe.ingredients.filter(item => checkedIngredients[item.id]).length;
   const missingIngredients = recipe.ingredients.filter(item => !checkedIngredients[item.id]);
   const handleAddToShopping = () => {
@@ -125,6 +132,22 @@ export const RecipeDetailModal = ({
             </View>
             <Text style={styles.title}>{recipe.title}</Text>
             {recipe.description ? <Text style={styles.description}>{recipe.description}</Text> : null}
+            {recipe.tags?.length ? <View style={styles.tagRow}>
+                {recipe.tags.map(tag => <AppleBadge key={tag} label={tag} variant="sky" />)}
+              </View> : null}
+            {stats.count ? <Text style={styles.cookedLine}>
+                🍳 Đã nấu {stats.count} lần • gần nhất {formatCookedDay(stats.lastAt).toLowerCase()}{stats.avgRating ? ` • ${formatRating(stats.avgRating)}` : ''}
+              </Text> : null}
+            {/* Detection is keyword-based: always worded as "có thể chứa" */}
+            {allergens.length ? <View style={[styles.allergenBox, declared.length > 0 && styles.allergenBoxAlert]}>
+                <Text style={[styles.allergenTitle, declared.length > 0 && styles.allergenTitleAlert]}>
+                  {declared.length ? `⚠ CÓ THỂ CHỨA CHẤT BẠN DỊ ỨNG: ${declared.map(a => a.label).join(', ').toUpperCase()}` : '⚠ CÓ THỂ CHỨA CHẤT GÂY DỊ ỨNG'}
+                </Text>
+                {allergens.map(found => <Text key={found.id} style={styles.allergenLine}>
+                    • {found.label}: {found.ingredients.join(', ')}
+                  </Text>)}
+                <Text style={styles.allergenFoot}>Nhận diện tự động theo tên nguyên liệu — hãy kiểm tra nhãn sản phẩm thực tế.</Text>
+              </View> : null}
             {/* Built-in recipes are read-only: customizing goes through a personal copy */}
             <View style={styles.recipeActions}>
               {recipe.isCustom && onEditRecipe ? <Pressable accessibilityRole="button" onPress={() => onEditRecipe(recipe)} style={styles.recipeActionBtn}>
@@ -432,6 +455,49 @@ const styles = StyleSheet.create({
   description: {
     fontSize: 14,
     lineHeight: 22,
+    color: HeronColors.granite
+  },
+  tagRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 10
+  },
+  cookedLine: {
+    marginTop: 10,
+    fontSize: 13,
+    fontWeight: '700',
+    color: HeronColors.emerald
+  },
+  allergenBox: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: Radius.md,
+    backgroundColor: '#FFF8E1',
+    gap: 2
+  },
+  allergenBoxAlert: {
+    backgroundColor: '#FFE8E0',
+    borderWidth: 1,
+    borderColor: '#FDBA9C'
+  },
+  allergenTitle: {
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+    color: '#8A5A00',
+    marginBottom: 4
+  },
+  allergenTitleAlert: {
+    color: '#B42318'
+  },
+  allergenLine: {
+    fontSize: 13,
+    color: HeronColors.secondary
+  },
+  allergenFoot: {
+    marginTop: 4,
+    fontSize: 11,
     color: HeronColors.granite
   },
   recipeActions: {

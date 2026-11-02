@@ -6,6 +6,10 @@ import { getSessionStepIndex, makeId, normalizeRecipe, recipeSignature, relocate
 import { normalizeVi } from '../utils/text';
 import { normalizeUnit } from '../utils/units';
 import { mergeIntoShoppingList } from '../utils/shopping';
+import { HISTORY_LIMIT, makeHistoryEntry, sanitizeHistory } from '../utils/history';
+import { MAX_TIMERS, finishDueTimers, getTimerRemaining, restoreTimers, timerIdFor } from '../utils/timers';
+import { cancelTimerNotification, initTimerNotifications, scheduleTimerNotification } from '../utils/notifications';
+import { buildBackup } from '../utils/backup';
 import { showAlert } from '../utils/dialog';
 import { SERVINGS_MAX, SERVINGS_MIN } from '../constants/limits';
 
@@ -15,12 +19,18 @@ const STORAGE_KEY_SHOPPING = '@cookflow_shopping_v2';
 const STORAGE_KEY_PANTRY = '@cookflow_pantry_v1';
 const STORAGE_KEY_ONBOARDING = '@cookflow_onboarding_v2';
 const STORAGE_KEY_SETTINGS = '@cookflow_settings_v1';
-const STORAGE_KEY_TIMER = '@cookflow_timer_v1';
+const STORAGE_KEY_LEGACY_TIMER = '@cookflow_timer_v1'; // single timer of older versions, migrated
+const STORAGE_KEY_TIMERS = '@cookflow_timers_v2';
 const STORAGE_KEY_SESSION = '@cookflow_cooking_session_v1';
+const STORAGE_KEY_HISTORY = '@cookflow_history_v1';
 const RecipeContext = createContext(undefined);
 
-// assumeStaples: basic seasonings count as "on hand"; autoStockPantry: bought items go to the pantry
-export const DEFAULT_SETTINGS = { keepAwake: true, timerSound: true, vibration: true, assumeStaples: true, autoStockPantry: true };
+// assumeStaples: basic seasonings count as "on hand"; autoStockPantry: bought items go to the pantry;
+// timerNotifications: system notification when a timer ends in background; allergies: allergen ids
+export const DEFAULT_SETTINGS = {
+  keepAwake: true, timerSound: true, vibration: true, timerNotifications: true,
+  assumeStaples: true, autoStockPantry: true, allergies: [], hideAllergenRecipes: true
+};
 
 // Safe storage helper
 export const safeStorage = {
@@ -88,19 +98,6 @@ const DEFAULT_SHOPPING = [{
 
 const clampServings = value => Math.min(SERVINGS_MAX, Math.max(SERVINGS_MIN, Math.round(Number(value)) || SERVINGS_MIN));
 
-/**
- * Timer model (one active timer per app, tied to a recipe step):
- * { recipeId, recipeTitle, stepIndex, stepTitle, durationSeconds, status: 'running'|'paused'|'done',
- *   endAt (epoch ms, while running), remainingSeconds (while paused/done) }
- * Remaining time is derived from the wall clock, so it stays correct after the JS thread
- * is paused in background, after a browser tab is throttled, or after an app restart.
- */
-export const getTimerRemaining = (timer, now = Date.now()) => {
-  if (!timer) return 0;
-  if (timer.status === 'running') return Math.max(0, Math.ceil((timer.endAt - now) / 1000));
-  return Math.max(0, timer.remainingSeconds ?? 0);
-};
-
 const usePersist = (isHydrated, key, value) => {
   useEffect(() => {
     if (!isHydrated) return;
@@ -113,7 +110,7 @@ export const RecipeProvider = ({
   children
 }) => {
   const [isHydrated, setIsHydrated] = useState(false);
-  const [cookingTimer, setCookingTimer] = useState(null);
+  const [cookingTimers, setCookingTimers] = useState([]);
   const [now, setNow] = useState(Date.now());
   const [recipes, setRecipes] = useState(() => INITIAL_RECIPES.map(normalizeRecipe));
   const [favoriteIds, setFavoriteIds] = useState(['rec_01', 'rec_03']);
@@ -124,6 +121,7 @@ export const RecipeProvider = ({
   const [shoppingList, setShoppingList] = useState(DEFAULT_SHOPPING);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
+  const [cookHistory, setCookHistory] = useState([]);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   // Latest list for synchronous merges (two adds in the same tick must not drop items)
@@ -136,11 +134,13 @@ export const RecipeProvider = ({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [rawRecipes, rawFavs, rawShopping, rawPantry, rawOnboarding, rawSettings, rawTimer, rawSession] = await Promise.all([
+      const [rawRecipes, rawFavs, rawShopping, rawPantry, rawOnboarding, rawSettings, rawTimers, rawSession, rawHistory, rawLegacyTimer] = await Promise.all([
         STORAGE_KEY_RECIPES, STORAGE_KEY_FAVS, STORAGE_KEY_SHOPPING, STORAGE_KEY_PANTRY,
-        STORAGE_KEY_ONBOARDING, STORAGE_KEY_SETTINGS, STORAGE_KEY_TIMER, STORAGE_KEY_SESSION
+        STORAGE_KEY_ONBOARDING, STORAGE_KEY_SETTINGS, STORAGE_KEY_TIMERS, STORAGE_KEY_SESSION,
+        STORAGE_KEY_HISTORY, STORAGE_KEY_LEGACY_TIMER
       ].map(key => safeStorage.getItem(key)));
       if (cancelled) return;
+      setCookHistory(sanitizeHistory(parseJson(rawHistory)));
 
       let loadedRecipes = INITIAL_RECIPES.map(normalizeRecipe);
       const storedRecipes = parseJson(rawRecipes);
@@ -166,14 +166,13 @@ export const RecipeProvider = ({
       const storedPantry = parseJson(rawPantry);
       if (Array.isArray(storedPantry)) setPantryIngredients(storedPantry.filter(item => typeof item === 'string'));
       const storedSettings = parseJson(rawSettings);
-      if (storedSettings && typeof storedSettings === 'object') setSettings({ ...DEFAULT_SETTINGS, ...storedSettings });
-      const storedTimer = parseJson(rawTimer);
-      if (storedTimer?.recipeId && ['running', 'paused', 'done'].includes(storedTimer.status)) {
-        // A timer that ran out while the app was closed is restored as finished
-        setCookingTimer(storedTimer.status === 'running' && storedTimer.endAt <= Date.now()
-          ? { ...storedTimer, status: 'done', remainingSeconds: 0, endAt: undefined, notified: true }
-          : storedTimer);
+      if (storedSettings && typeof storedSettings === 'object') {
+        setSettings({ ...DEFAULT_SETTINGS, ...storedSettings, allergies: Array.isArray(storedSettings.allergies) ? storedSettings.allergies : [] });
       }
+      // Timers of deleted recipes are dropped; a timer that ran out while closed comes back finished
+      const knownRecipeIds = new Set(loadedRecipes.map(r => r.id));
+      setCookingTimers(restoreTimers(parseJson(rawTimers), parseJson(rawLegacyTimer)).filter(timer => knownRecipeIds.has(timer.recipeId)));
+      if (rawLegacyTimer) safeStorage.removeItem(STORAGE_KEY_LEGACY_TIMER);
       setHasSeenOnboarding(rawOnboarding === 'true');
       setIsHydrated(true);
     })();
@@ -188,11 +187,12 @@ export const RecipeProvider = ({
   usePersist(isHydrated, STORAGE_KEY_SHOPPING, shoppingList);
   usePersist(isHydrated, STORAGE_KEY_PANTRY, pantryIngredients);
   usePersist(isHydrated, STORAGE_KEY_SETTINGS, settings);
-  usePersist(isHydrated, STORAGE_KEY_TIMER, cookingTimer);
+  usePersist(isHydrated, STORAGE_KEY_TIMERS, cookingTimers);
   usePersist(isHydrated, STORAGE_KEY_SESSION, cookingSession);
+  usePersist(isHydrated, STORAGE_KEY_HISTORY, cookHistory);
 
   // ---------- Timer clock ----------
-  const isTimerRunning = cookingTimer?.status === 'running';
+  const isTimerRunning = cookingTimers.some(timer => timer.status === 'running');
   useEffect(() => {
     if (!isTimerRunning) return undefined;
     setNow(Date.now());
@@ -208,26 +208,62 @@ export const RecipeProvider = ({
 
   // Finish detection lives here (not in TimerCircle) so it fires even when Cooking Mode is closed
   useEffect(() => {
-    if (!cookingTimer || cookingTimer.status !== 'running' || now < cookingTimer.endAt) return;
-    const finished = cookingTimer;
-    setCookingTimer(timer => timer && timer.status === 'running'
-      ? { ...timer, status: 'done', remainingSeconds: 0, endAt: undefined, notified: true }
-      : timer);
+    const { finished } = finishDueTimers(cookingTimers, now);
+    if (!finished.length) return;
+    setCookingTimers(prev => finishDueTimers(prev, now).timers);
     const { vibration, timerSound } = settingsRef.current;
     if (vibration && Platform.OS !== 'web') Vibration.vibrate([0, 500, 300, 500]);
+    const lines = finished.map(timer => `${timer.recipeTitle}\nBước ${timer.stepIndex + 1}: ${timer.stepTitle}`);
     if (timerSound) {
       Speech.stop();
-      Speech.speak(`Hết giờ bước ${finished.stepIndex + 1}: ${finished.stepTitle}`, { language: 'vi-VN' });
+      Speech.speak(finished.map(timer => `Hết giờ bước ${timer.stepIndex + 1}: ${timer.stepTitle}`).join('. '), { language: 'vi-VN' });
     }
-    showAlert('⏰ ĐÃ HẾT GIỜ!', `${finished.recipeTitle}\nBước ${finished.stepIndex + 1}: ${finished.stepTitle}`);
-  }, [now, cookingTimer]);
+    showAlert('⏰ ĐÃ HẾT GIỜ!', lines.join('\n\n'));
+  }, [now, cookingTimers]);
 
-  const startStepTimer = useCallback(({ recipe, stepIndex, seconds }) => {
+  // ---------- System notifications (background / closed app) ----------
+  // timerId → { endAt, idPromise }: one scheduled notification per running timer
+  const scheduledRef = useRef(new Map());
+  const [notificationsReady, setNotificationsReady] = useState(false);
+  useEffect(() => {
+    initTimerNotifications().finally(() => setNotificationsReady(true));
+  }, []);
+  useEffect(() => {
+    if (!isHydrated || !notificationsReady) return;
+    const wanted = new Map(settings.timerNotifications
+      ? cookingTimers.filter(timer => timer.status === 'running').map(timer => [timer.id, timer])
+      : []);
+    scheduledRef.current.forEach((entry, id) => {
+      if (wanted.get(id)?.endAt === entry.endAt) return;
+      entry.idPromise.then(cancelTimerNotification);
+      scheduledRef.current.delete(id);
+    });
+    wanted.forEach((timer, id) => {
+      if (!scheduledRef.current.has(id)) scheduledRef.current.set(id, { endAt: timer.endAt, idPromise: scheduleTimerNotification(timer) });
+    });
+  }, [isHydrated, notificationsReady, cookingTimers, settings.timerNotifications]);
+
+  const updateTimer = useCallback((id, update) => {
+    setNow(Date.now());
+    setCookingTimers(prev => prev.map(timer => timer.id === id ? update(timer) : timer));
+  }, []);
+  /**
+   * Starts (or restarts) the timer of one step. Other steps' timers keep running.
+   * @returns false when MAX_TIMERS other timers are already active
+   */
+  const startStepTimer = ({ recipe, stepIndex, seconds }) => {
     const step = recipe?.steps?.[stepIndex];
     const duration = Math.max(1, Math.round(seconds || step?.timerSeconds || 0));
-    if (!recipe || !step || !duration) return;
+    if (!recipe || !step || !duration) return false;
+    const id = timerIdFor(recipe.id, step.id);
+    const others = cookingTimers.filter(timer => timer.id !== id);
+    // Finished timers make room automatically; only running/paused ones count towards the limit
+    const active = others.filter(timer => timer.status !== 'done');
+    if (active.length >= MAX_TIMERS) return false;
+    const kept = others.length >= MAX_TIMERS ? active : others;
     setNow(Date.now());
-    setCookingTimer({
+    setCookingTimers([...kept, {
+      id,
       recipeId: recipe.id,
       recipeTitle: recipe.title,
       stepId: step.id,
@@ -236,31 +272,24 @@ export const RecipeProvider = ({
       durationSeconds: duration,
       status: 'running',
       endAt: Date.now() + duration * 1000
-    });
-  }, []);
-  const pauseTimer = useCallback(() => {
-    setCookingTimer(timer => timer?.status === 'running'
-      ? { ...timer, status: 'paused', remainingSeconds: getTimerRemaining(timer), endAt: undefined }
-      : timer);
-  }, []);
-  const resumeTimer = useCallback(() => {
-    setNow(Date.now());
-    setCookingTimer(timer => timer?.status === 'paused' && timer.remainingSeconds > 0
-      ? { ...timer, status: 'running', endAt: Date.now() + timer.remainingSeconds * 1000, remainingSeconds: undefined }
-      : timer);
-  }, []);
-  const addTimerMinute = useCallback(() => {
-    setNow(Date.now());
-    setCookingTimer(timer => {
-      if (!timer) return timer;
-      if (timer.status === 'running') return { ...timer, endAt: timer.endAt + 60000, durationSeconds: timer.durationSeconds + 60 };
-      if (timer.status === 'done') {
-        return { ...timer, status: 'running', endAt: Date.now() + 60000, remainingSeconds: undefined, durationSeconds: 60, notified: false };
-      }
-      return { ...timer, remainingSeconds: timer.remainingSeconds + 60, durationSeconds: timer.durationSeconds + 60 };
-    });
-  }, []);
-  const clearTimer = useCallback(() => setCookingTimer(null), []);
+    }]);
+    return true;
+  };
+  const pauseTimer = useCallback(id => updateTimer(id, timer => timer.status === 'running'
+    ? { ...timer, status: 'paused', remainingSeconds: getTimerRemaining(timer), endAt: undefined }
+    : timer), [updateTimer]);
+  const resumeTimer = useCallback(id => updateTimer(id, timer => timer.status === 'paused' && timer.remainingSeconds > 0
+    ? { ...timer, status: 'running', endAt: Date.now() + timer.remainingSeconds * 1000, remainingSeconds: undefined }
+    : timer), [updateTimer]);
+  const addTimerMinute = useCallback(id => updateTimer(id, timer => {
+    if (timer.status === 'running') return { ...timer, endAt: timer.endAt + 60000, durationSeconds: timer.durationSeconds + 60 };
+    if (timer.status === 'done') {
+      return { ...timer, status: 'running', endAt: Date.now() + 60000, remainingSeconds: undefined, durationSeconds: 60, notified: false };
+    }
+    return { ...timer, remainingSeconds: timer.remainingSeconds + 60, durationSeconds: timer.durationSeconds + 60 };
+  }), [updateTimer]);
+  const clearTimer = useCallback(id => setCookingTimers(prev => prev.filter(timer => timer.id !== id)), []);
+  const clearRecipeTimers = useCallback(recipeId => setCookingTimers(prev => prev.filter(timer => timer.recipeId !== recipeId)), []);
 
   // ---------- Recipes ----------
   const addRecipe = newRecipeData => {
@@ -281,13 +310,18 @@ export const RecipeProvider = ({
     const previous = recipes.find(r => r.id === normalized.id);
     setRecipes(prev => prev.map(r => r.id === normalized.id ? normalized : r));
     // The cooking session reads the live recipe and follows its step by id
-    setCookingTimer(timer => relocateTimerStep(timer, previous, normalized));
+    // Each timer follows its step by id (and stops when that step was deleted)
+    setCookingTimers(prev => prev
+      .map(timer => relocateTimerStep(timer, previous, normalized))
+      .filter(Boolean)
+      .map(timer => ({ ...timer, id: timerIdFor(timer.recipeId, timer.stepId) }))
+      .filter((timer, idx, list) => list.findIndex(other => other.id === timer.id) === idx));
   };
   const deleteRecipe = id => {
     setRecipes(prev => prev.filter(r => r.id !== id));
     setFavoriteIds(prev => prev.filter(fId => fId !== id));
     setCookingSession(session => session?.recipeId === id ? null : session);
-    setCookingTimer(timer => timer?.recipeId === id ? null : timer);
+    setCookingTimers(prev => prev.filter(timer => timer.recipeId !== id));
   };
   const findDuplicateRecipe = candidate => {
     const signature = recipeSignature(candidate);
@@ -325,6 +359,15 @@ export const RecipeProvider = ({
     setCookingSession(session => session ? { ...session, servings: clampServings(servings) } : session);
   };
   const endCookingSession = () => setCookingSession(null);
+
+  // ---------- Cooking history ----------
+  /** Logs a finished dish (with optional 1–5 rating and note). */
+  const recordCooking = ({ recipe, servings, startedAt, rating, note }) => {
+    const entry = makeHistoryEntry({ recipe, servings, startedAt, rating, note });
+    if (entry) setCookHistory(prev => [entry, ...prev].slice(0, HISTORY_LIMIT));
+    return entry;
+  };
+  const deleteHistoryEntry = id => setCookHistory(prev => prev.filter(entry => entry.id !== id));
 
   // ---------- Pantry ----------
   const togglePantryIngredient = ingredientName => {
@@ -427,17 +470,48 @@ export const RecipeProvider = ({
     safeStorage.removeItem(STORAGE_KEY_ONBOARDING);
   };
 
-  const timerSecondsLeft = useMemo(() => getTimerRemaining(cookingTimer, now), [cookingTimer, now]);
+  // ---------- Backup / restore / reset ----------
+  const exportBackup = () => buildBackup({ recipes, favoriteIds, shoppingList, pantryIngredients, settings, cookHistory });
+  // Built-in recipes always come from the app itself; the user's own data is replaced as a whole
+  const replaceUserData = ({ recipes: customRecipes = [], favoriteIds: favs = [], shoppingList: shopping = [], pantry = [], settings: savedSettings = {}, history = [] }) => {
+    const builtIns = INITIAL_RECIPES.map(normalizeRecipe);
+    const builtInIds = new Set(builtIns.map(r => r.id));
+    setRecipes([...customRecipes.filter(r => !builtInIds.has(r.id)), ...builtIns]);
+    setFavoriteIds(favs);
+    shoppingRef.current = shopping;
+    setShoppingList(shopping);
+    pantryRef.current = pantry;
+    setPantryIngredients(pantry);
+    setSettings({ ...DEFAULT_SETTINGS, ...savedSettings });
+    setCookHistory(history);
+    setCookingSession(null);
+    setCookingTimers([]);
+  };
+  /** Replaces the user's data with a backup already validated by parseBackup(). */
+  const restoreBackup = data => replaceUserData(data);
+  /** Deletes every personal recipe, list, setting and history entry (the onboarding stays seen). */
+  const resetAllData = () => replaceUserData({});
+
+  // Timers with their remaining seconds at the current clock tick
+  const timers = useMemo(() => cookingTimers.map(timer => ({ ...timer, secondsLeft: getTimerRemaining(timer, now) })), [cookingTimers, now]);
+  const getStepTimer = (recipeId, stepId) => timers.find(timer => timer.id === timerIdFor(recipeId, stepId)) || null;
 
   return <RecipeContext.Provider value={{
     isHydrated,
-    cookingTimer,
-    timerSecondsLeft,
+    timers,
+    getStepTimer,
     startStepTimer,
     pauseTimer,
     resumeTimer,
     addTimerMinute,
     clearTimer,
+    clearRecipeTimers,
+    cookHistory,
+    recordCooking,
+    deleteHistoryEntry,
+    exportBackup,
+    restoreBackup,
+    resetAllData,
     recipes,
     favoriteIds,
     selectedCategory,

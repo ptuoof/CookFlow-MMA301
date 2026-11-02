@@ -2,9 +2,15 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Image } from 'react-native';
 import { confirmAction } from '../utils/dialog';
 import { totalMinutes } from '../utils/recipeModel';
+import { formatCookedDay } from '../utils/history';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { AppleBadge } from './ui/AppleBadge';
 import { useRecipes } from '../context/RecipeContext';
+const EMPTY_TEXT = {
+  favorites: ['CHƯA CÓ CÔNG THỨC LƯU', 'Hãy thả tim các món bạn quan tâm tại trang Khám phá để lưu trữ vào kho cá nhân.'],
+  custom: ['CHƯA CÓ CÔNG THỨC TỰ TẠO', 'Nhấn nút “+” ở thanh điều hướng để khởi tạo công thức nấu ăn của riêng bạn.'],
+  history: ['CHƯA NẤU MÓN NÀO', 'Hoàn thành một món trong Chế độ nấu để lưu lịch sử, đánh giá và ghi chú cho lần sau.']
+};
 export const MyRecipesView = ({
   onSelectRecipe,
   onEditRecipe
@@ -13,37 +19,59 @@ export const MyRecipesView = ({
     recipes,
     favoriteIds,
     deleteRecipe,
-    cookingTimer
+    timers,
+    cookHistory,
+    deleteHistoryEntry,
+    getRecipeById
   } = useRecipes();
   const [activeTab, setActiveTab] = useState('favorites');
   const favoriteRecipes = recipes.filter(r => favoriteIds.includes(r.id));
   const customRecipes = recipes.filter(r => r.isCustom);
   const handleDelete = recipe => {
-    const isCooking = cookingTimer?.recipeId === recipe.id;
+    const isCooking = timers.some(timer => timer.recipeId === recipe.id);
     confirmAction({
       title: 'Xóa công thức?',
-      message: `Công thức "${recipe.title}" sẽ bị xóa vĩnh viễn${isCooking ? ' và timer đang chạy của món này sẽ dừng' : ''}.`,
+      message: `Công thức "${recipe.title}" sẽ bị xóa vĩnh viễn${isCooking ? ' và timer đang chạy của món này sẽ dừng' : ''}. Lịch sử nấu món này vẫn được giữ.`,
       confirmText: 'Xóa vĩnh viễn',
       destructive: true,
       onConfirm: () => deleteRecipe(recipe.id)
     });
   };
-  const currentList = activeTab === 'favorites' ? favoriteRecipes : customRecipes;
+  const handleDeleteHistory = entry => confirmAction({
+    title: 'Xóa lần nấu này?',
+    message: `"${entry.recipeTitle}" — ${formatCookedDay(entry.finishedAt)}.`,
+    confirmText: 'Xóa',
+    destructive: true,
+    onConfirm: () => deleteHistoryEntry(entry.id)
+  });
+  const currentList = activeTab === 'favorites' ? favoriteRecipes : activeTab === 'custom' ? customRecipes : cookHistory;
+  const renderSegment = (tab, label, count) => <Pressable onPress={() => setActiveTab(tab)} style={[styles.segmentBtn, activeTab === tab && styles.segmentBtnActive]}>
+      <Text style={[styles.segmentText, activeTab === tab && styles.segmentTextActive]}>
+        {label} [{count}]
+      </Text>
+    </Pressable>;
+  const renderHistoryEntry = entry => {
+    const recipe = getRecipeById(entry.recipeId);
+    return <Pressable key={entry.id} disabled={!recipe} onPress={() => onSelectRecipe(recipe)} onLongPress={() => handleDeleteHistory(entry)} style={styles.historyCard}>
+        <View style={styles.historyTop}>
+          <Text style={[styles.cardTitle, { flex: 1 }]} numberOfLines={1}>{entry.recipeTitle}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Xóa lần nấu này" hitSlop={8} onPress={() => handleDeleteHistory(entry)}>
+            <Text style={styles.historyDelete}>✕</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.historyMeta}>
+          {formatCookedDay(entry.finishedAt)} • {entry.servings} người{entry.rating ? ` • ${'★'.repeat(entry.rating)}${'☆'.repeat(5 - entry.rating)}` : ''}{recipe ? '' : ' • món đã bị xóa'}
+        </Text>
+        {entry.note ? <Text style={styles.historyNote}>“{entry.note}”</Text> : null}
+      </Pressable>;
+  };
   return <View style={styles.container}>
       {/* Heron Minimalist Segmented Control */}
       <View style={styles.segmentedWrapper}>
         <View style={styles.segmentedControl}>
-          <Pressable onPress={() => setActiveTab('favorites')} style={[styles.segmentBtn, activeTab === 'favorites' && styles.segmentBtnActive]}>
-            <Text style={[styles.segmentText, activeTab === 'favorites' && styles.segmentTextActive]}>
-              ĐÃ LƯU [{favoriteRecipes.length}]
-            </Text>
-          </Pressable>
-
-          <Pressable onPress={() => setActiveTab('custom')} style={[styles.segmentBtn, activeTab === 'custom' && styles.segmentBtnActive]}>
-            <Text style={[styles.segmentText, activeTab === 'custom' && styles.segmentTextActive]}>
-              TỰ TẠO [{customRecipes.length}]
-            </Text>
-          </Pressable>
+          {renderSegment('favorites', 'ĐÃ LƯU', favoriteRecipes.length)}
+          {renderSegment('custom', 'TỰ TẠO', customRecipes.length)}
+          {renderSegment('history', 'ĐÃ NẤU', cookHistory.length)}
         </View>
       </View>
 
@@ -54,12 +82,12 @@ export const MyRecipesView = ({
               <Text style={styles.emptySquareIcon}>∅</Text>
             </View>
             <Text style={styles.emptyTitle}>
-              {activeTab === 'favorites' ? 'CHƯA CÓ CÔNG THỨC LƯU' : 'CHƯA CÓ CÔNG THỨC TỰ TẠO'}
+              {EMPTY_TEXT[activeTab][0]}
             </Text>
             <Text style={styles.emptySubtitle}>
-              {activeTab === 'favorites' ? 'Hãy thả tim các món bạn quan tâm tại trang Khám phá để lưu trữ vào kho cá nhân.' : 'Nhấn nút "+" ở thanh điều hướng để khởi tạo công thức nấu ăn của riêng bạn.'}
+              {EMPTY_TEXT[activeTab][1]}
             </Text>
-          </View> : currentList.map(item => <Pressable key={item.id} onPress={() => onSelectRecipe(item)} style={({
+          </View> : activeTab === 'history' ? cookHistory.map(renderHistoryEntry) : currentList.map(item => <Pressable key={item.id} onPress={() => onSelectRecipe(item)} style={({
         pressed
       }) => [styles.card, {
         transform: [{
@@ -191,6 +219,37 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     color: HeronColors.granite
+  },
+  historyCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: Radius.md,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: HeronColors.border,
+    gap: 2,
+    ...HeronShadow.subtle
+  },
+  historyTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12
+  },
+  historyDelete: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#94A3B8'
+  },
+  historyMeta: {
+    fontSize: 12,
+    color: HeronColors.granite
+  },
+  historyNote: {
+    marginTop: 4,
+    fontSize: 13,
+    fontStyle: 'italic',
+    color: HeronColors.secondary
   },
   actionRow: {
     flexDirection: 'row',
