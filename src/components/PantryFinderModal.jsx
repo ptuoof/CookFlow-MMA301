@@ -3,7 +3,7 @@ import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Switch
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
 import { containsPhrase, normalizeVi as normalize } from '../utils/text';
-import { showAlert } from '../utils/dialog';
+import { confirmAction, showAlert } from '../utils/dialog';
 
 // Basic seasonings most kitchens always have; optionally not counted as "missing".
 const STAPLES = ['muoi', 'duong', 'tieu', 'nuoc loc', 'dau an', 'hat nem', 'bot ngot', 'nuoc da'];
@@ -64,6 +64,13 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
     const { added, merged } = addToShoppingList(result.missingIngredients, result.recipe.title);
     showAlert('Đã cập nhật giỏ đi chợ', `Món ${result.recipe.title}: thêm mới ${added}${merged ? `, cộng dồn ${merged}` : ''} nguyên liệu còn thiếu.`);
   };
+  const handleClearPantry = () => confirmAction({
+    title: 'Xóa hết nguyên liệu trong tủ?',
+    message: `${pantryIngredients.length} nguyên liệu đã chọn sẽ bị bỏ chọn.`,
+    confirmText: 'Xóa hết',
+    destructive: true,
+    onConfirm: clearPantry
+  });
   const handleAddCustom = () => {
     if (!canAddCustom) return;
     togglePantryIngredient(trimmedQuery);
@@ -108,7 +115,7 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
           <Text style={styles.sectionTitle}>NGUYÊN LIỆU CỦA BẠN</Text>
           <Text style={styles.sectionHint}>{pantryIngredients.length} nguyên liệu đã chọn</Text>
         </View>
-        {pantryIngredients.length > 0 ? <Pressable accessibilityRole="button" onPress={clearPantry} style={({ pressed }) => [styles.clearAllButton, pressed && styles.pressed]}>
+        {pantryIngredients.length > 0 ? <Pressable accessibilityRole="button" onPress={handleClearPantry} style={({ pressed }) => [styles.clearAllButton, pressed && styles.pressed]}>
           <Text style={styles.clearAllText}>Bỏ chọn tất cả</Text>
         </Pressable> : null}
       </View>

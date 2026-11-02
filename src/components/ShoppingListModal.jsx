@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Share, Platform } from 'react-native';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
 import { groupShoppingItemsByAisle } from '../utils/groceryAisles';
 import { confirmAction, showAlert } from '../utils/dialog';
+const UNDO_TIMEOUT_MS = 5000;
 export const ShoppingListModal = ({
   visible,
   onClose
@@ -12,9 +13,29 @@ export const ShoppingListModal = ({
     shoppingList,
     toggleShoppingItem,
     deleteShoppingItem,
+    restoreShoppingItem,
     clearCheckedShoppingItems,
     addCustomShoppingItem
   } = useRecipes();
+  // One-tap delete stays fast; the last removed row can be restored for a few seconds
+  const [lastRemoved, setLastRemoved] = useState(null);
+  const undoTimeoutRef = useRef(null);
+  useEffect(() => {
+    if (!visible) setLastRemoved(null);
+  }, [visible]);
+  useEffect(() => () => clearTimeout(undoTimeoutRef.current), []);
+  const handleDeleteItem = id => {
+    const removed = deleteShoppingItem(id);
+    if (!removed) return;
+    setLastRemoved(removed);
+    clearTimeout(undoTimeoutRef.current);
+    undoTimeoutRef.current = setTimeout(() => setLastRemoved(null), UNDO_TIMEOUT_MS);
+  };
+  const handleUndoDelete = () => {
+    clearTimeout(undoTimeoutRef.current);
+    restoreShoppingItem(lastRemoved);
+    setLastRemoved(null);
+  };
   const [newName, setNewName] = useState('');
   const [newAmount, setNewAmount] = useState('');
   const [newUnit, setNewUnit] = useState('');
@@ -156,7 +177,7 @@ export const ShoppingListModal = ({
 
                   <Pressable accessibilityRole="button" accessibilityLabel={`Xóa ${item.name}`} onPress={e => {
               e.stopPropagation();
-              deleteShoppingItem(item.id);
+              handleDeleteItem(item.id);
             }} style={styles.deleteBtn}>
                     <Text style={styles.deleteText}>✕</Text>
                   </Pressable>
@@ -179,6 +200,14 @@ export const ShoppingListModal = ({
           height: 60
         }} />
         </ScrollView>
+
+        {/* Undo bar for the last deleted row */}
+        {lastRemoved ? <View style={styles.undoBar} accessibilityLiveRegion="polite">
+            <Text style={styles.undoText} numberOfLines={1}>Đã xóa "{lastRemoved.item.name}"</Text>
+            <Pressable accessibilityRole="button" onPress={handleUndoDelete} hitSlop={8}>
+              <Text style={styles.undoAction}>HOÀN TÁC</Text>
+            </Pressable>
+          </View> : null}
       </View>
     </Modal>;
 };
@@ -415,5 +444,31 @@ const styles = StyleSheet.create({
     color: '#DC2626',
     fontWeight: '700',
     fontSize: 13
+  },
+  undoBar: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    backgroundColor: HeronColors.inkPrimary,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    borderRadius: Radius.md,
+    ...HeronShadow.dock
+  },
+  undoText: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600'
+  },
+  undoAction: {
+    color: HeronColors.brand,
+    fontSize: 14,
+    fontWeight: '900'
   }
 });

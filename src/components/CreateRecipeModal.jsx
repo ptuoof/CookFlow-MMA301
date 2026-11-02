@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Modal, View, Text, StyleSheet, ScrollView, TextInput, Pressable, KeyboardAvoidingView, Platform, Image } from 'react-native';
 import { confirmAction, showAlert } from '../utils/dialog';
 import { parseIntInRange } from '../utils/quantity';
 import { normalizeVi } from '../utils/text';
 import { DEFAULT_RECIPE_IMAGE, makeId } from '../utils/recipeModel';
+import { persistMedia } from '../utils/media';
+import { MINUTES_MAX, SERVINGS_MAX, SERVINGS_MIN, TIMER_MINUTES_MAX } from '../constants/limits';
 import { CATEGORIES as ALL_CATEGORIES } from '../types/recipe';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,6 +13,52 @@ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
 const CATEGORIES = ALL_CATEGORIES.filter(cat => cat !== 'Tất cả');
 const DIFFICULTIES = ['Dễ', 'Vừa', 'Khó'];
+const emptyIngredient = () => ({ id: makeId('i'), name: '', amount: '', unit: 'gram' });
+const emptyStep = title => ({ id: makeId('s'), title, instruction: '', timerMinutes: '', tip: '' });
+
+// Form values for a recipe being edited, or for a blank new recipe
+const toFormState = recipe => recipe ? {
+  title: recipe.title,
+  description: recipe.description,
+  imageUrl: recipe.imageUrl,
+  videoUrl: recipe.videoUrl || '',
+  category: recipe.category,
+  prepTime: recipe.prepTimeMinutes.toString(),
+  cookTime: recipe.cookTimeMinutes.toString(),
+  servings: recipe.servings.toString(),
+  difficulty: recipe.difficulty,
+  ingredients: recipe.ingredients,
+  steps: recipe.steps.map(s => ({
+    id: s.id,
+    title: s.title,
+    instruction: s.instruction,
+    timerMinutes: s.timerSeconds ? Math.max(1, Math.round(s.timerSeconds / 60)).toString() : '',
+    tip: s.tip || '',
+    image: s.image,
+    videoUrl: s.videoUrl
+  }))
+} : {
+  title: '',
+  description: '',
+  imageUrl: '',
+  videoUrl: '',
+  category: 'Món nhanh ⚡',
+  prepTime: '10',
+  cookTime: '15',
+  servings: '2',
+  difficulty: 'Dễ',
+  ingredients: [emptyIngredient()],
+  steps: [emptyStep('Chuẩn bị nguyên liệu')]
+};
+
+// Comparable text of everything the user can change; ids and UI-only flags are ignored
+const snapshotOf = form => JSON.stringify([
+  form.title, form.description, form.imageUrl, form.videoUrl, form.category,
+  form.prepTime, form.cookTime, form.servings, form.difficulty,
+  form.ingredients.map(i => [i.name, i.amount, i.unit].map(v => String(v ?? '').trim())),
+  form.steps.map(s => [s.title, s.instruction, s.timerMinutes, s.tip, s.image, s.videoUrl].map(v => String(v ?? '').trim()))
+].map(v => typeof v === 'string' ? v.trim() : v));
+
 export const CreateRecipeModal = ({
   visible,
   onClose,
@@ -35,80 +83,34 @@ export const CreateRecipeModal = ({
   const [difficulty, setDifficulty] = useState('Dễ');
 
   // Ingredients
-  const [ingredients, setIngredients] = useState([{
-    id: '1',
-    name: '',
-    amount: '',
-    unit: 'gram'
-  }]);
+  const [ingredients, setIngredients] = useState(() => [emptyIngredient()]);
 
   // Steps
-  const [steps, setSteps] = useState([{
-    title: 'Chuẩn bị nguyên liệu',
-    instruction: '',
-    timerMinutes: '',
-    tip: ''
-  }]);
-  useEffect(() => {
-    if (editingRecipe) {
-      setTitle(editingRecipe.title);
-      setDescription(editingRecipe.description);
-      setImageUrl(editingRecipe.imageUrl);
-      setVideoUrl(editingRecipe.videoUrl || '');
-      // If it's a web URL, default to link, else album
-      if (editingRecipe.imageUrl?.startsWith('http')) {
-        setImageSourceMode('link');
-      } else {
-        setImageSourceMode('album');
-      }
-      if (editingRecipe.videoUrl?.startsWith('http')) {
-        setVideoSourceMode('link');
-      } else {
-        setVideoSourceMode('album');
-      }
-      setCategory(editingRecipe.category);
-      setPrepTime(editingRecipe.prepTimeMinutes.toString());
-      setCookTime(editingRecipe.cookTimeMinutes.toString());
-      setServings(editingRecipe.servings.toString());
-      setDifficulty(editingRecipe.difficulty);
-      setIngredients(editingRecipe.ingredients);
-      setSteps(editingRecipe.steps.map(s => ({
-        title: s.title,
-        instruction: s.instruction,
-        timerMinutes: s.timerSeconds ? Math.max(1, Math.round(s.timerSeconds / 60)).toString() : '',
-        tip: s.tip || '',
-        image: s.image,
-        videoUrl: s.videoUrl
-      })));
-    } else {
-      resetForm();
-    }
-  }, [editingRecipe, visible]);
-  const resetForm = () => {
-    setTitle('');
-    setDescription('');
-    setImageUrl('');
-    setVideoUrl('');
-    setImageSourceMode('album');
-    setVideoSourceMode('album');
-    setCategory('Món nhanh ⚡');
-    setPrepTime('10');
-    setCookTime('15');
-    setServings('2');
-    setDifficulty('Dễ');
-    setIngredients([{
-      id: '1',
-      name: '',
-      amount: '',
-      unit: 'gram'
-    }]);
-    setSteps([{
-      title: 'Chuẩn bị nguyên liệu',
-      instruction: '',
-      timerMinutes: '',
-      tip: ''
-    }]);
+  const [steps, setSteps] = useState(() => [emptyStep('Chuẩn bị nguyên liệu')]);
+  const [isSaving, setIsSaving] = useState(false);
+  // Snapshot of the values the form was opened with, to detect unsaved changes
+  const initialSnapshotRef = useRef(snapshotOf(toFormState(null)));
+  const applyFormState = form => {
+    setTitle(form.title);
+    setDescription(form.description);
+    setImageUrl(form.imageUrl);
+    setVideoUrl(form.videoUrl);
+    // If it's a web URL, default to link, else album
+    setImageSourceMode(form.imageUrl?.startsWith('http') ? 'link' : 'album');
+    setVideoSourceMode(form.videoUrl?.startsWith('http') ? 'link' : 'album');
+    setCategory(form.category);
+    setPrepTime(form.prepTime);
+    setCookTime(form.cookTime);
+    setServings(form.servings);
+    setDifficulty(form.difficulty);
+    setIngredients(form.ingredients);
+    setSteps(form.steps);
+    initialSnapshotRef.current = snapshotOf(form);
   };
+  useEffect(() => {
+    applyFormState(toFormState(editingRecipe));
+  }, [editingRecipe, visible]);
+  const resetForm = () => applyFormState(toFormState(null));
 
   // Image & Video Picker Handlers
   const pickMainImageFromLibrary = async () => {
@@ -224,12 +226,7 @@ export const CreateRecipeModal = ({
 
   // Steps handlers
   const addStepRow = () => {
-    setSteps(prev => [...prev, {
-      title: `Bước ${prev.length + 1}`,
-      instruction: '',
-      timerMinutes: '',
-      tip: ''
-    }]);
+    setSteps(prev => [...prev, emptyStep(`Bước ${prev.length + 1}`)]);
   };
   const updateStepField = (index, field, value) => {
     setSteps(prev => {
@@ -246,17 +243,18 @@ export const CreateRecipeModal = ({
       setSteps(prev => prev.filter((_, i) => i !== index));
     }
   };
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (isSaving) return;
     const errors = [];
     const cleanTitle = title.trim();
     if (!cleanTitle) errors.push('Nhập tên món ăn.');
-    const prep = parseIntInRange(prepTime, 0, 1440);
-    const cook = parseIntInRange(cookTime, 0, 1440);
-    const portions = parseIntInRange(servings, 1, 50);
-    if (prep === null) errors.push('Thời gian sơ chế phải là số phút từ 0 đến 1440.');
-    if (cook === null) errors.push('Thời gian nấu phải là số phút từ 0 đến 1440.');
+    const prep = parseIntInRange(prepTime, 0, MINUTES_MAX);
+    const cook = parseIntInRange(cookTime, 0, MINUTES_MAX);
+    const portions = parseIntInRange(servings, SERVINGS_MIN, SERVINGS_MAX);
+    if (prep === null) errors.push(`Thời gian sơ chế phải là số phút từ 0 đến ${MINUTES_MAX}.`);
+    if (cook === null) errors.push(`Thời gian nấu phải là số phút từ 0 đến ${MINUTES_MAX}.`);
     if (prep !== null && cook !== null && prep + cook === 0) errors.push('Tổng thời gian sơ chế + nấu phải lớn hơn 0 phút.');
-    if (portions === null) errors.push('Khẩu phần phải từ 1 đến 50 người.');
+    if (portions === null) errors.push(`Khẩu phần phải từ ${SERVINGS_MIN} đến ${SERVINGS_MAX} người.`);
     const validIngredients = ingredients
       .filter(i => (i.name || '').trim() !== '')
       .map((i, idx) => ({ ...i, id: i.id || `i${idx + 1}`, name: i.name.trim(), amount: String(i.amount ?? '').trim() || 'Vừa đủ', unit: String(i.unit ?? '').trim() }));
@@ -273,9 +271,10 @@ export const CreateRecipeModal = ({
     const validSteps = [];
     filledSteps.forEach((s, idx) => {
       const minutesText = String(s.timerMinutes ?? '').trim();
-      const minutes = minutesText ? parseIntInRange(minutesText, 1, 600) : null;
-      if (minutesText && minutes === null) errors.push(`Bước ${idx + 1}: hẹn giờ phải là số phút từ 1 đến 600.`);
+      const minutes = minutesText ? parseIntInRange(minutesText, 1, TIMER_MINUTES_MAX) : null;
+      if (minutesText && minutes === null) errors.push(`Bước ${idx + 1}: hẹn giờ phải là số phút từ 1 đến ${TIMER_MINUTES_MAX}.`);
       validSteps.push({
+        id: s.id,
         stepNumber: idx + 1,
         title: (s.title || '').trim() || `Bước ${idx + 1}`,
         instruction: s.instruction.trim(),
@@ -289,12 +288,23 @@ export const CreateRecipeModal = ({
       showAlert('Chưa thể lưu công thức', errors.map(e => `• ${e}`).join('\n'));
       return;
     }
-    const finalImageUrl = imageUrl.trim() || DEFAULT_RECIPE_IMAGE;
+    setIsSaving(true);
+    // Album picks live in a purgeable cache: copy them next to the app data before saving
+    const [finalImageUrl, finalVideoUrl, ...stepMedia] = await Promise.all([
+      persistMedia(imageUrl.trim() || DEFAULT_RECIPE_IMAGE),
+      persistMedia(videoUrl.trim() || undefined),
+      ...validSteps.flatMap(s => [persistMedia(s.image), persistMedia(s.videoUrl)])
+    ]);
+    setIsSaving(false);
+    validSteps.forEach((s, idx) => {
+      s.image = stepMedia[idx * 2];
+      s.videoUrl = stepMedia[idx * 2 + 1];
+    });
     const payload = {
       title: cleanTitle,
       description: description.trim() || 'Món ăn tự sáng tạo thơm ngon bổ dưỡng.',
       imageUrl: finalImageUrl,
-      videoUrl: videoUrl.trim() || undefined,
+      videoUrl: finalVideoUrl,
       category,
       prepTimeMinutes: prep,
       cookTimeMinutes: cook,
@@ -314,11 +324,10 @@ export const CreateRecipeModal = ({
     onClose();
   };
   const handleRequestClose = () => {
-    const isDirty = editingRecipe
-      ? title.trim() !== editingRecipe.title
-        || ingredients.length !== editingRecipe.ingredients.length
-        || steps.length !== editingRecipe.steps.length
-      : title.trim() !== '' || ingredients.some(i => (i.name || '').trim()) || steps.some(s => (s.instruction || '').trim());
+    // Any edited field counts (amounts, timers, tips, media...), not only the title or row count
+    const isDirty = snapshotOf({
+      title, description, imageUrl, videoUrl, category, prepTime, cookTime, servings, difficulty, ingredients, steps
+    }) !== initialSnapshotRef.current;
     if (!isDirty) return onClose();
     return confirmAction({
       title: 'Bỏ thay đổi?',
@@ -349,8 +358,8 @@ export const CreateRecipeModal = ({
                 {editingRecipe ? 'Sửa Công Thức' : 'Tạo Món Ăn Mới'}
               </Text>
             </View>
-            <Pressable onPress={handleSave} style={styles.saveBtn}>
-              <Text style={styles.saveText}>Lưu ➔</Text>
+            <Pressable onPress={handleSave} disabled={isSaving} style={styles.saveBtn}>
+              <Text style={styles.saveText}>{isSaving ? 'Đang lưu…' : 'Lưu ➔'}</Text>
             </Pressable>
           </View>
 

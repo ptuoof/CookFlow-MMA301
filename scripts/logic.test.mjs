@@ -5,7 +5,8 @@ const R = new URL('../src', import.meta.url).href;
 const { scaleAmount, addAmounts, parseAmount, parseIntInRange } = await import(`${R}/utils/quantity.js`);
 const { normalizeVi, matchesSearch, containsPhrase } = await import(`${R}/utils/text.js`);
 const { getGroceryAisle } = await import(`${R}/utils/groceryAisles.js`);
-const { normalizeRecipe, recipeSignature } = await import(`${R}/utils/recipeModel.js`);
+const { normalizeRecipe, recipeSignature, normalizeCategory, relocateTimerStep } = await import(`${R}/utils/recipeModel.js`);
+const { SERVINGS_MAX, TIMER_SECONDS_MAX } = await import(`${R}/constants/limits.js`);
 const { encodeRecipeForQr, decodeRecipeFromQr } = await import(`${R}/services/recipeQr.js`);
 const { INITIAL_RECIPES } = await import(`${R}/data/mockRecipes.js`);
 
@@ -56,6 +57,41 @@ test('normalizeRecipe', () => {
   assert.equal(r.servings, 1);
   assert.equal(normalizeRecipe({ title: '' }), null);
   INITIAL_RECIPES.forEach(x => assert.ok(normalizeRecipe(x)));
+});
+test('step ids are unique and survive edits', () => {
+  const r = normalizeRecipe({ title: 'A', steps: [{ instruction: 'a' }, { id: 'x', instruction: 'b' }, { id: 'x', instruction: 'c' }] });
+  assert.deepEqual(r.steps.map(s => s.id), ['s1', 'x', 'x_2']);
+  // Re-normalizing (storage reload, edit) keeps the same ids
+  assert.deepEqual(normalizeRecipe(r).steps.map(s => s.id), ['s1', 'x', 'x_2']);
+});
+test('timer follows its step after an edit', () => {
+  const before = normalizeRecipe({ id: 'r', title: 'A', steps: [{ id: 'a', instruction: 'a' }, { id: 'b', title: 'Luộc', instruction: 'b' }] });
+  const timer = { recipeId: 'r', stepId: 'b', stepIndex: 1, stepTitle: 'Luộc', status: 'running' };
+  // A step inserted before it: the timer moves to index 2, same title
+  const inserted = normalizeRecipe({ ...before, steps: [before.steps[0], { id: 'n', title: 'Mới', instruction: 'n' }, before.steps[1]] });
+  assert.deepEqual([relocateTimerStep(timer, before, inserted).stepIndex, relocateTimerStep(timer, before, inserted).stepTitle], [2, 'Luộc']);
+  // Its own step deleted: the timer stops instead of pointing at another step
+  const removed = normalizeRecipe({ ...before, steps: [before.steps[0]] });
+  assert.equal(relocateTimerStep(timer, before, removed), null);
+  // Timer saved before step ids existed is matched through the previous recipe
+  const legacy = { ...timer, stepId: undefined };
+  assert.equal(relocateTimerStep(legacy, before, inserted).stepIndex, 2);
+  // Other recipes' timers are untouched
+  assert.equal(relocateTimerStep({ ...timer, recipeId: 'other' }, before, removed).stepIndex, 1);
+});
+test('categories and limits are consistent', () => {
+  assert.equal(normalizeCategory('Món chính 🍲'), 'Món chính 🍲');
+  assert.equal(normalizeCategory('mon chinh'), 'Món chính 🍲');
+  assert.equal(normalizeCategory('Tráng miệng'), 'Tráng miệng 🍰');
+  assert.equal(normalizeCategory('Đồ nướng BBQ'), 'Món chính 🍲');
+  assert.equal(normalizeCategory('Tất cả'), 'Món chính 🍲');
+  const big = normalizeRecipe({ title: 'A', servings: 80, steps: [{ instruction: 'x', timerSeconds: 99999 }] });
+  assert.equal(big.servings, SERVINGS_MAX);
+  assert.equal(big.steps[0].timerSeconds, TIMER_SECONDS_MAX);
+  // A QR code with an unknown category still lands in a filterable category
+  const qr = decodeRecipeFromQr(JSON.stringify({ title: 'B', category: 'Lạ', servings: 80, steps: [{ instruction: 'x' }] }));
+  assert.equal(normalizeRecipe(qr).category, 'Món chính 🍲');
+  assert.equal(qr.servings, SERVINGS_MAX);
 });
 test('QR round trip + local media dropped', () => {
   for (const recipe of INITIAL_RECIPES) {

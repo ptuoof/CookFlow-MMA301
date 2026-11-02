@@ -60,3 +60,18 @@ Mức độ: **Cao** = sai dữ liệu / kẹt luồng; **TB** = hành vi sai l�
 - Âm thanh chuông thật cần `expo-audio`; hiện dùng giọng đọc TTS.
 - Shopping list chưa quy đổi đơn vị (300 g + 0,5 kg vẫn là 2 dòng).
 - Gemini API key nằm trong bundle nếu dùng `EXPO_PUBLIC_GEMINI_API_KEY` — chỉ phù hợp demo đồ án.
+
+## 6. Đợt 2 — nhóm P0 (02/11/2026)
+
+| # | Mức | Vấn đề | Cách sửa |
+|---|---|---|---|
+| 20 | Cao | Sửa công thức khi đang chạy timer: thêm/xóa bước làm timer giữ chỉ số cũ và **gắn nhầm sang bước khác** | Mỗi bước có `id` ổn định (`normalizeRecipe`, form giữ id khi sửa); timer lưu `stepId`, `relocateTimerStep` dời timer theo bước, xóa đúng bước đó thì dừng timer |
+| 21 | Cao | Sửa định lượng / thời gian / mẹo rồi bấm Hủy → **mất thay đổi không hỏi** (chỉ so tên và số dòng) | So sánh snapshot toàn bộ giá trị form với lúc mở |
+| 22 | Cao | Ảnh/video chọn từ album là URI cache, hệ điều hành có thể dọn → **ảnh món tự tạo hỏng** | Khi lưu, copy media cục bộ vào thư mục tài liệu của app (`src/utils/media.js`, `expo-file-system`); web và link http giữ nguyên |
+| 23 | TB | Danh mục tự do (QR, dữ liệu cũ) → món không xuất hiện ở chip lọc nào | `normalizeCategory`: khớp không dấu/emoji với danh sách cố định, không khớp → "Món chính 🍲" |
+| 24 | TB | Giới hạn lệch nhau (khẩu phần 50 vs 100, timer 600 phút vs 24 giờ) | `src/constants/limits.js` dùng chung cho form, model, QR, màn chi tiết |
+| 25 | TB | "Xóa hết" tủ lạnh không hỏi; xóa dòng giỏ đi chợ không hoàn tác | Hỏi xác nhận khi xóa hết tủ lạnh; xóa dòng giỏ hiện thanh **HOÀN TÁC** 5 giây |
+
+Quy tắc cập nhật: khẩu phần 1–50, thời gian sơ chế/nấu 0–1440 phút, timer mỗi bước tối đa 600 phút — áp dụng cho mọi nguồn (form, QR, AI, dữ liệu lưu).
+
+Kiểm thử: `npm run test:logic` — 10 nhóm (thêm step id, timer theo bước, danh mục/giới hạn), đều đạt. Chưa chạy được Expo CLI/Metro trên máy rà soát (Node 20.12 < 20.19.4 yêu cầu, thiếu `expo-camera` trong `node_modules`) → cần thử tay: sửa món đang chạy timer (chèn/xóa bước), Hủy sau khi chỉ sửa định lượng, chọn ảnh từ album rồi khởi động lại app, xóa dòng giỏ rồi Hoàn tác.
