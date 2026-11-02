@@ -1,6 +1,7 @@
 // Normalizes recipe objects coming from storage, the create form, QR codes or AI variants,
 // so every screen can rely on the same shape (no undefined arrays, numbered steps, unique ids).
 import { normalizeVi, tokensOf } from './text';
+import { normalizeUnit } from './units';
 import { CATEGORIES } from '../types/recipe';
 import { MINUTES_MAX, SERVINGS_MAX, SERVINGS_MIN, TIMER_SECONDS_MAX } from '../constants/limits';
 
@@ -48,7 +49,7 @@ export const normalizeRecipe = recipe => {
       let id = str(item.id, `i${idx + 1}`);
       while (seenIds.has(id)) id = `${id}_${idx}`;
       seenIds.add(id);
-      return { ...item, id, name: str(item.name), amount: str(item.amount, 'Vừa đủ'), unit: str(item.unit) };
+      return { ...item, id, name: str(item.name), amount: str(item.amount, 'Vừa đủ'), unit: normalizeUnit(str(item.unit)) };
     });
 
   // Step ids survive adding, removing or reordering steps: timers key on them, so an edit
@@ -103,6 +104,18 @@ export const relocateTimerStep = (timer, previousRecipe, nextRecipe) => {
   const stepIndex = nextRecipe.steps.findIndex(step => step.id === stepId);
   if (stepIndex < 0) return null;
   return { ...timer, stepId, stepIndex, recipeTitle: nextRecipe.title, stepTitle: nextRecipe.steps[stepIndex].title };
+};
+
+/**
+ * Cooking session (one dish in progress, survives closing Cooking Mode and app restarts):
+ * { recipeId, servings, stepId, stepIndex, startedAt }. The step is tracked by id so recipe
+ * edits keep the user on the same step; stepIndex is the fallback when that step was deleted.
+ */
+export const getSessionStepIndex = (session, recipe) => {
+  const total = recipe?.steps?.length ?? 0;
+  if (!session || !total) return 0;
+  const byId = recipe.steps.findIndex(step => step.id === session.stepId);
+  return byId >= 0 ? byId : Math.min(Math.max(0, session.stepIndex || 0), total - 1);
 };
 
 // Signature used to detect that an imported recipe is already in the user's collection.

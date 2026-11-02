@@ -88,6 +88,38 @@ export const SettingsModal = ({
             </View>
           </View>
 
+          {/* Group: Tủ lạnh & đi chợ */}
+          <Text style={styles.groupTitle}>TỦ LẠNH & ĐI CHỢ</Text>
+          <View style={styles.groupCard}>
+            <View style={styles.settingRow}>
+              <View style={styles.rowLabelWrap}>
+                <Text style={styles.rowIcon}>🧊</Text>
+                <View style={{ flexShrink: 1 }}>
+                  <Text style={styles.rowTitle}>Tự cất vào tủ lạnh khi đã mua</Text>
+                  <Text style={styles.rowDesc}>Đánh dấu “đã mua” trong giỏ sẽ thêm nguyên liệu vào tủ lạnh</Text>
+                </View>
+              </View>
+              <Switch value={settings.autoStockPantry} onValueChange={value => updateSettings({ autoStockPantry: value })} trackColor={{
+              false: '#CED4DA',
+              true: AppleColors.mint
+            }} />
+            </View>
+
+            <View style={[styles.settingRow, styles.rowDivider]}>
+              <View style={styles.rowLabelWrap}>
+                <Text style={styles.rowIcon}>🧂</Text>
+                <View style={{ flexShrink: 1 }}>
+                  <Text style={styles.rowTitle}>Coi gia vị cơ bản là có sẵn</Text>
+                  <Text style={styles.rowDesc}>Muối, đường, tiêu, dầu ăn… không bị tính là thiếu</Text>
+                </View>
+              </View>
+              <Switch value={settings.assumeStaples} onValueChange={value => updateSettings({ assumeStaples: value })} trackColor={{
+              false: '#CED4DA',
+              true: AppleColors.coral
+            }} />
+            </View>
+          </View>
+
           {/* Group: Hướng dẫn người dùng */}
           <Text style={styles.groupTitle}>HƯỚNG DẪN ỨNG DỤNG</Text>
           <View style={styles.groupCard}>

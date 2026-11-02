@@ -10,18 +10,24 @@ import { scaleAmount } from '../utils/quantity';
 import { showAlert } from '../utils/dialog';
 import { hasTimer, hasVideo, totalMinutes } from '../utils/recipeModel';
 import { SERVINGS_MAX as MAX_SERVINGS } from '../constants/limits';
+import { ingredientsOnHand } from '../utils/pantry';
 export const RecipeDetailModal = ({
   recipe: recipeProp,
   visible,
   onClose,
-  onStartCooking
+  onStartCooking,
+  onEditRecipe,
+  onDuplicateRecipe
 }) => {
   const {
     toggleFavorite,
     isFavorite,
     addToShoppingList,
-    getRecipeById
+    getRecipeById,
+    pantryIngredients,
+    settings
   } = useRecipes();
+  const [prefilledCount, setPrefilledCount] = useState(0);
   const [checkedIngredients, setCheckedIngredients] = useState({});
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
   const [aiQuestion, setAiQuestion] = useState(null);
@@ -32,9 +38,13 @@ export const RecipeDetailModal = ({
   useEffect(() => {
     if (recipe) setCurrentServings(recipe.servings);
   }, [recipe?.id, recipe?.servings]);
-  // Ingredient ids ("i1", "i2"...) repeat across recipes: a new recipe must start with a clean checklist
+  // Ingredient ids ("i1", "i2"...) repeat across recipes: each recipe starts its own checklist,
+  // pre-ticked with what the pantry (and basic seasonings, if enabled) already covers
   useEffect(() => {
-    setCheckedIngredients({});
+    const onHand = recipe ? ingredientsOnHand(recipe.ingredients, pantryIngredients, settings.assumeStaples) : [];
+    setCheckedIngredients(Object.fromEntries(onHand.map(item => [item.id, true])));
+    setPrefilledCount(onHand.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recipe?.id]);
   if (!recipe) return null;
   const ratio = currentServings / Math.max(1, recipe.servings);
@@ -115,6 +125,15 @@ export const RecipeDetailModal = ({
             </View>
             <Text style={styles.title}>{recipe.title}</Text>
             {recipe.description ? <Text style={styles.description}>{recipe.description}</Text> : null}
+            {/* Built-in recipes are read-only: customizing goes through a personal copy */}
+            <View style={styles.recipeActions}>
+              {recipe.isCustom && onEditRecipe ? <Pressable accessibilityRole="button" onPress={() => onEditRecipe(recipe)} style={styles.recipeActionBtn}>
+                  <Text style={styles.recipeActionText}>✎ Sửa công thức</Text>
+                </Pressable> : null}
+              {onDuplicateRecipe ? <Pressable accessibilityRole="button" onPress={() => onDuplicateRecipe(recipe)} style={styles.recipeActionBtn}>
+                  <Text style={styles.recipeActionText}>⧉ Tạo bản sao để chỉnh</Text>
+                </Pressable> : null}
+            </View>
           </View>
 
           {/* Personal copy adjusted by AI Sous-Chef */}
@@ -168,6 +187,9 @@ export const RecipeDetailModal = ({
                 {readyCount}/{recipe.ingredients.length} ĐÃ CÓ
               </Text>
             </View>
+            {prefilledCount > 0 ? <Text style={styles.prefillHint}>
+                Đã tick sẵn {prefilledCount} nguyên liệu có trong tủ lạnh{settings.assumeStaples ? ' / gia vị cơ bản' : ''} — bỏ tick nếu đã hết.
+              </Text> : null}
 
             <View style={styles.ingredientsListCard}>
               {recipe.ingredients.map((item, index) => {
@@ -281,11 +303,11 @@ export const RecipeDetailModal = ({
         <View style={styles.stickyFooter}>
           <AppleButton title="BẮT ĐẦU NẤU CÙNG VIDEO & HẸN GIỜ ➔" size="lg" variant="primary" onPress={() => {
           onClose();
-          onStartCooking(recipe);
+          onStartCooking(recipe, currentServings);
         }} />
         </View>
 
-        <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={recipe} initialQuestion={aiQuestion} />
+        <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={recipe} servings={currentServings} initialQuestion={aiQuestion} />
 
         <ShareRecipeModal key={recipe.id} visible={isShareVisible} onClose={() => setIsShareVisible(false)} recipe={recipe} />
       </View>
@@ -412,6 +434,26 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: HeronColors.granite
   },
+  recipeActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12
+  },
+  recipeActionBtn: {
+    minHeight: 40,
+    paddingHorizontal: 14,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: HeronColors.border,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center'
+  },
+  recipeActionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: HeronColors.inkPrimary
+  },
   statsGrid: {
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
@@ -478,6 +520,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: HeronColors.surface,
     letterSpacing: 0.5
+  },
+  prefillHint: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: HeronColors.emerald,
+    marginBottom: 8
   },
   ingredientsListCard: {
     backgroundColor: '#FFFFFF',

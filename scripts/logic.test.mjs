@@ -5,7 +5,10 @@ const R = new URL('../src', import.meta.url).href;
 const { scaleAmount, addAmounts, parseAmount, parseIntInRange } = await import(`${R}/utils/quantity.js`);
 const { normalizeVi, matchesSearch, containsPhrase } = await import(`${R}/utils/text.js`);
 const { getGroceryAisle } = await import(`${R}/utils/groceryAisles.js`);
-const { normalizeRecipe, recipeSignature, normalizeCategory, relocateTimerStep } = await import(`${R}/utils/recipeModel.js`);
+const { normalizeRecipe, recipeSignature, normalizeCategory, relocateTimerStep, getSessionStepIndex } = await import(`${R}/utils/recipeModel.js`);
+const { normalizeUnit, addQuantities } = await import(`${R}/utils/units.js`);
+const { mergeIntoShoppingList } = await import(`${R}/utils/shopping.js`);
+const { ingredientsOnHand, pantryItemsUsedBy, isStapleIngredient } = await import(`${R}/utils/pantry.js`);
 const { SERVINGS_MAX, TIMER_SECONDS_MAX } = await import(`${R}/constants/limits.js`);
 const { encodeRecipeForQr, decodeRecipeFromQr } = await import(`${R}/services/recipeQr.js`);
 const { INITIAL_RECIPES } = await import(`${R}/data/mockRecipes.js`);
@@ -107,4 +110,50 @@ test('QR round trip + local media dropped', () => {
   const local = { ...INITIAL_RECIPES[0], imageUrl: 'file:///x.jpg', videoUrl: undefined };
   assert.ok(!encodeRecipeForQr(local).payload.includes('file://'));
   assert.throws(() => decodeRecipeFromQr('CF1:{bad'));
+});
+test('unit catalog', () => {
+  assert.equal(normalizeUnit('gram'), 'g');
+  assert.equal(normalizeUnit(' Gr '), 'g');
+  assert.equal(normalizeUnit('Lít'), 'lít');
+  assert.equal(normalizeUnit('thìa canh'), 'muỗng canh');
+  assert.equal(normalizeUnit('nắm'), 'nắm'); // unknown units are kept as typed
+  assert.deepEqual(addQuantities({ amount: '300', unit: 'g' }, { amount: '0,5', unit: 'kg' }), { amount: '800', unit: 'g' });
+  assert.deepEqual(addQuantities({ amount: '600', unit: 'gram' }, { amount: '600', unit: 'g' }), { amount: '1,2', unit: 'kg' });
+  assert.deepEqual(addQuantities({ amount: '1', unit: 'lít' }, { amount: '250', unit: 'ml' }), { amount: '1250', unit: 'ml' });
+  assert.deepEqual(addQuantities({ amount: '1', unit: 'lít' }, { amount: '500', unit: 'ml' }), { amount: '1,5', unit: 'lít' });
+  assert.deepEqual(addQuantities({ amount: '2', unit: 'quả' }, { amount: '1', unit: 'trái' }), { amount: '3', unit: 'quả' });
+  assert.equal(addQuantities({ amount: '2', unit: 'quả' }, { amount: '100', unit: 'g' }), null);
+  assert.equal(addQuantities({ amount: 'Vừa đủ', unit: 'g' }, { amount: '100', unit: 'g' }), null);
+  // Recipes store canonical units
+  assert.equal(normalizeRecipe({ title: 'A', ingredients: [{ name: 'Bột', amount: '100', unit: 'gram' }] }).ingredients[0].unit, 'g');
+});
+test('shopping merge across units', () => {
+  let { list, added, merged } = mergeIntoShoppingList([], [{ name: 'Thịt bò', amount: '300', unit: 'gram' }], 'Món A');
+  assert.deepEqual([added, merged, list[0].unit], [1, 0, 'g']);
+  ({ list, added, merged } = mergeIntoShoppingList(list, [{ name: 'thit bo', amount: '0,5', unit: 'kg' }], 'Món B'));
+  assert.deepEqual([added, merged, list.length, list[0].amount, list[0].unit, list[0].recipeTitle], [0, 1, 1, '800', 'g', 'Món A, Món B']);
+  // Incompatible units and bought rows are never merged
+  ({ list } = mergeIntoShoppingList(list, [{ name: 'Thịt bò', amount: '1', unit: 'miếng' }], 'Món C'));
+  assert.equal(list.length, 2);
+  const bought = list.map(item => ({ ...item, checked: true }));
+  assert.equal(mergeIntoShoppingList(bought, [{ name: 'Thịt bò', amount: '100', unit: 'g' }], 'Món D').added, 1);
+  // Same text amounts merge without changing the amount
+  ({ list } = mergeIntoShoppingList([], [{ name: 'Muối', amount: 'Vừa đủ' }, { name: 'muối', amount: 'vừa đủ' }], 'X'));
+  assert.equal(list.length, 1);
+});
+test('pantry helpers', () => {
+  const ingredients = [{ id: 'a', name: 'Thịt bò phi lê' }, { id: 'b', name: 'Muối' }, { id: 'c', name: 'Hành tây' }];
+  assert.deepEqual(ingredientsOnHand(ingredients, ['Thịt bò'], true).map(i => i.id), ['a', 'b']);
+  assert.deepEqual(ingredientsOnHand(ingredients, ['Thịt bò'], false).map(i => i.id), ['a']);
+  assert.ok(isStapleIngredient('Muối hột'));
+  assert.deepEqual(pantryItemsUsedBy({ ingredients }, ['Thịt bò', 'Trứng gà', 'Hành tây']), ['Thịt bò', 'Hành tây']);
+});
+test('cooking session step follows the step id', () => {
+  const recipe = normalizeRecipe({ id: 'r', title: 'A', steps: [{ id: 'a', instruction: 'a' }, { id: 'b', instruction: 'b' }, { id: 'c', instruction: 'c' }] });
+  assert.equal(getSessionStepIndex({ stepId: 'c', stepIndex: 2 }, recipe), 2);
+  const edited = normalizeRecipe({ ...recipe, steps: [recipe.steps[2], recipe.steps[0]] });
+  assert.equal(getSessionStepIndex({ stepId: 'c', stepIndex: 2 }, edited), 0); // moved
+  assert.equal(getSessionStepIndex({ stepId: 'b', stepIndex: 1 }, edited), 1); // deleted → keep position
+  assert.equal(getSessionStepIndex({ stepId: 'zz', stepIndex: 9 }, edited), 1); // clamped
+  assert.equal(getSessionStepIndex(null, recipe), 0);
 });

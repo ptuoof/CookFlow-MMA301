@@ -2,10 +2,12 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AppState, Platform, Vibration } from 'react-native';
 import * as Speech from 'expo-speech';
 import { INITIAL_RECIPES } from '../data/mockRecipes';
-import { makeId, normalizeRecipe, recipeSignature, relocateTimerStep } from '../utils/recipeModel';
+import { getSessionStepIndex, makeId, normalizeRecipe, recipeSignature, relocateTimerStep } from '../utils/recipeModel';
 import { normalizeVi } from '../utils/text';
-import { addAmounts } from '../utils/quantity';
+import { normalizeUnit } from '../utils/units';
+import { mergeIntoShoppingList } from '../utils/shopping';
 import { showAlert } from '../utils/dialog';
+import { SERVINGS_MAX, SERVINGS_MIN } from '../constants/limits';
 
 const STORAGE_KEY_RECIPES = '@cookflow_recipes_v2';
 const STORAGE_KEY_FAVS = '@cookflow_favs_v2';
@@ -14,9 +16,11 @@ const STORAGE_KEY_PANTRY = '@cookflow_pantry_v1';
 const STORAGE_KEY_ONBOARDING = '@cookflow_onboarding_v2';
 const STORAGE_KEY_SETTINGS = '@cookflow_settings_v1';
 const STORAGE_KEY_TIMER = '@cookflow_timer_v1';
+const STORAGE_KEY_SESSION = '@cookflow_cooking_session_v1';
 const RecipeContext = createContext(undefined);
 
-export const DEFAULT_SETTINGS = { keepAwake: true, timerSound: true, vibration: true };
+// assumeStaples: basic seasonings count as "on hand"; autoStockPantry: bought items go to the pantry
+export const DEFAULT_SETTINGS = { keepAwake: true, timerSound: true, vibration: true, assumeStaples: true, autoStockPantry: true };
 
 // Safe storage helper
 export const safeStorage = {
@@ -82,10 +86,7 @@ const DEFAULT_SHOPPING = [{
   checked: true
 }];
 
-const appendSource = (current, title) => {
-  const sources = String(current || '').split(', ').filter(Boolean);
-  return sources.includes(title) ? current : [...sources, title].join(', ');
-};
+const clampServings = value => Math.min(SERVINGS_MAX, Math.max(SERVINGS_MIN, Math.round(Number(value)) || SERVINGS_MIN));
 
 /**
  * Timer model (one active timer per app, tied to a recipe step):
@@ -118,7 +119,7 @@ export const RecipeProvider = ({
   const [favoriteIds, setFavoriteIds] = useState(['rec_01', 'rec_03']);
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeRecipeForCooking, setActiveRecipeForCooking] = useState(null);
+  const [cookingSession, setCookingSession] = useState(null);
   const [pantryIngredients, setPantryIngredients] = useState([]);
   const [shoppingList, setShoppingList] = useState(DEFAULT_SHOPPING);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -128,30 +129,39 @@ export const RecipeProvider = ({
   // Latest list for synchronous merges (two adds in the same tick must not drop items)
   const shoppingRef = useRef(shoppingList);
   shoppingRef.current = shoppingList;
+  const pantryRef = useRef(pantryIngredients);
+  pantryRef.current = pantryIngredients;
 
   // ---------- Load persisted data once ----------
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [rawRecipes, rawFavs, rawShopping, rawPantry, rawOnboarding, rawSettings, rawTimer] = await Promise.all([
+      const [rawRecipes, rawFavs, rawShopping, rawPantry, rawOnboarding, rawSettings, rawTimer, rawSession] = await Promise.all([
         STORAGE_KEY_RECIPES, STORAGE_KEY_FAVS, STORAGE_KEY_SHOPPING, STORAGE_KEY_PANTRY,
-        STORAGE_KEY_ONBOARDING, STORAGE_KEY_SETTINGS, STORAGE_KEY_TIMER
+        STORAGE_KEY_ONBOARDING, STORAGE_KEY_SETTINGS, STORAGE_KEY_TIMER, STORAGE_KEY_SESSION
       ].map(key => safeStorage.getItem(key)));
       if (cancelled) return;
 
+      let loadedRecipes = INITIAL_RECIPES.map(normalizeRecipe);
       const storedRecipes = parseJson(rawRecipes);
       if (Array.isArray(storedRecipes)) {
         const normalized = storedRecipes.map(normalizeRecipe).filter(Boolean);
         // Built-in recipes added in a newer app version are appended for existing users
         const knownIds = new Set(normalized.map(r => r.id));
         const newSamples = INITIAL_RECIPES.filter(r => !knownIds.has(r.id)).map(normalizeRecipe);
-        setRecipes([...normalized, ...newSamples]);
+        loadedRecipes = [...normalized, ...newSamples];
+        setRecipes(loadedRecipes);
+      }
+      const storedSession = parseJson(rawSession);
+      if (storedSession?.recipeId && loadedRecipes.some(r => r.id === storedSession.recipeId)) {
+        setCookingSession({ ...storedSession, servings: clampServings(storedSession.servings) });
       }
       const storedFavs = parseJson(rawFavs);
       if (Array.isArray(storedFavs)) setFavoriteIds(storedFavs.filter(id => typeof id === 'string'));
       const storedShopping = parseJson(rawShopping);
       if (Array.isArray(storedShopping)) {
-        setShoppingList(storedShopping.filter(item => item && typeof item.name === 'string').map(item => ({ ...item, id: item.id || makeId('shop') })));
+        setShoppingList(storedShopping.filter(item => item && typeof item.name === 'string')
+          .map(item => ({ ...item, id: item.id || makeId('shop'), unit: normalizeUnit(item.unit) })));
       }
       const storedPantry = parseJson(rawPantry);
       if (Array.isArray(storedPantry)) setPantryIngredients(storedPantry.filter(item => typeof item === 'string'));
@@ -179,6 +189,7 @@ export const RecipeProvider = ({
   usePersist(isHydrated, STORAGE_KEY_PANTRY, pantryIngredients);
   usePersist(isHydrated, STORAGE_KEY_SETTINGS, settings);
   usePersist(isHydrated, STORAGE_KEY_TIMER, cookingTimer);
+  usePersist(isHydrated, STORAGE_KEY_SESSION, cookingSession);
 
   // ---------- Timer clock ----------
   const isTimerRunning = cookingTimer?.status === 'running';
@@ -269,14 +280,13 @@ export const RecipeProvider = ({
     if (!normalized) return;
     const previous = recipes.find(r => r.id === normalized.id);
     setRecipes(prev => prev.map(r => r.id === normalized.id ? normalized : r));
-    // Keep an open cooking session in sync with the edited content
-    setActiveRecipeForCooking(active => active?.id === normalized.id ? normalized : active);
+    // The cooking session reads the live recipe and follows its step by id
     setCookingTimer(timer => relocateTimerStep(timer, previous, normalized));
   };
   const deleteRecipe = id => {
     setRecipes(prev => prev.filter(r => r.id !== id));
     setFavoriteIds(prev => prev.filter(fId => fId !== id));
-    setActiveRecipeForCooking(active => active?.id === id ? null : active);
+    setCookingSession(session => session?.recipeId === id ? null : session);
     setCookingTimer(timer => timer?.recipeId === id ? null : timer);
   };
   const findDuplicateRecipe = candidate => {
@@ -289,6 +299,33 @@ export const RecipeProvider = ({
   const isFavorite = id => favoriteIds.includes(id);
   const getRecipeById = id => recipes.find(r => r.id === id);
 
+  // ---------- Cooking session ----------
+  const activeRecipeForCooking = useMemo(
+    () => cookingSession ? recipes.find(r => r.id === cookingSession.recipeId) || null : null,
+    [recipes, cookingSession]
+  );
+  const cookingStepIndex = getSessionStepIndex(cookingSession, activeRecipeForCooking);
+  const startCookingSession = (recipe, { servings, stepIndex = 0 } = {}) => {
+    if (!recipe?.steps?.length) return;
+    const index = Math.min(Math.max(0, stepIndex), recipe.steps.length - 1);
+    setCookingSession({
+      recipeId: recipe.id,
+      servings: clampServings(servings ?? recipe.servings),
+      stepId: recipe.steps[index].id,
+      stepIndex: index,
+      startedAt: Date.now()
+    });
+  };
+  const setCookingStep = stepIndex => {
+    const step = activeRecipeForCooking?.steps?.[stepIndex];
+    if (!step) return;
+    setCookingSession(session => session ? { ...session, stepId: step.id, stepIndex } : session);
+  };
+  const setCookingServings = servings => {
+    setCookingSession(session => session ? { ...session, servings: clampServings(servings) } : session);
+  };
+  const endCookingSession = () => setCookingSession(null);
+
   // ---------- Pantry ----------
   const togglePantryIngredient = ingredientName => {
     const key = normalizeVi(ingredientName);
@@ -298,43 +335,61 @@ export const RecipeProvider = ({
       : [...prev, ingredientName.trim()]);
   };
   const clearPantry = () => setPantryIngredients([]);
+  const isInPantryList = name => pantryRef.current.some(item => normalizeVi(item) === normalizeVi(name));
+  const addPantryIngredient = name => {
+    const clean = String(name || '').trim();
+    if (!clean || isInPantryList(clean)) return false;
+    pantryRef.current = [...pantryRef.current, clean];
+    setPantryIngredients(pantryRef.current);
+    return true;
+  };
+  /** Removes several pantry entries at once (e.g. ingredients used up by a cooked dish). */
+  const removePantryIngredients = names => {
+    const keys = new Set((names || []).map(normalizeVi));
+    if (!keys.size) return;
+    pantryRef.current = pantryRef.current.filter(item => !keys.has(normalizeVi(item)));
+    setPantryIngredients(pantryRef.current);
+  };
 
   // ---------- Shopping list ----------
   /**
-   * Adds ingredients, merging with unchecked rows of the same name + unit instead of duplicating.
-   * @returns {{ added: number, merged: number }}
+   * Adds ingredients, merging with unchecked rows of the same name (same unit or g/kg, ml/lít)
+   * instead of duplicating. @returns {{ added: number, merged: number }}
    */
   const addToShoppingList = (ingredients, recipeTitle) => {
-    const source = recipeTitle || 'Công thức CookFlow';
-    const result = { added: 0, merged: 0 };
-    const list = [...shoppingRef.current];
-    (ingredients || []).forEach(ing => {
-      const name = String(ing?.name ?? '').trim();
-      if (!name) return;
-      const amount = String(ing.amount ?? '').trim() || 'Vừa đủ';
-      const unit = String(ing.unit ?? '').trim();
-      const idx = list.findIndex(item => !item.checked
-        && normalizeVi(item.name) === normalizeVi(name)
-        && normalizeVi(item.unit) === normalizeVi(unit));
-      if (idx >= 0) {
-        const existing = list[idx];
-        const summed = addAmounts(existing.amount, amount);
-        const sameText = normalizeVi(existing.amount) === normalizeVi(amount);
-        if (summed !== null || sameText) {
-          list[idx] = { ...existing, amount: summed ?? existing.amount, recipeTitle: appendSource(existing.recipeTitle, source) };
-          result.merged += 1;
-          return;
-        }
-      }
-      list.unshift({ id: makeId('shop'), name, amount, unit, recipeTitle: source, checked: false });
-      result.added += 1;
-    });
+    const { list, added, merged } = mergeIntoShoppingList(shoppingRef.current, ingredients, recipeTitle || 'Công thức CookFlow');
     shoppingRef.current = list;
     setShoppingList(list);
-    return result;
+    return { added, merged };
   };
+  /**
+   * Marks a row bought / not bought. With autoStockPantry, buying puts the item in the pantry
+   * (flagged so un-ticking by mistake takes it back out — but never an item that was already there).
+   */
   const toggleShoppingItem = id => {
-    setShoppingList(prev => prev.map(item => item.id === id ? { ...item, checked: !item.checked } : item));
+    const item = shoppingRef.current.find(row => row.id === id);
+    if (!item) return;
+    const checked = !item.checked;
+    let stockedToPantry = item.stockedToPantry;
+    if (checked && settingsRef.current.autoStockPantry && addPantryIngredient(item.name)) {
+      stockedToPantry = true;
+    } else if (!checked && item.stockedToPantry) {
+      const stillBought = shoppingRef.current.some(row => row.id !== id && row.checked && normalizeVi(row.name) === normalizeVi(item.name));
+      if (!stillBought) removePantryIngredients([item.name]);
+      stockedToPantry = undefined;
+    }
+    const list = shoppingRef.current.map(row => row.id === id ? { ...row, checked, stockedToPantry } : row);
+    shoppingRef.current = list;
+    setShoppingList(list);
+  };
+  /** Edits a row's name / amount / unit. @returns false when the name is empty. */
+  const updateShoppingItem = (id, patch) => {
+    const name = String(patch?.name ?? '').trim();
+    if (!name) return false;
+    const amount = String(patch?.amount ?? '').trim() || 'Vừa đủ';
+    const unit = normalizeUnit(patch?.unit);
+    setShoppingList(prev => prev.map(row => row.id === id ? { ...row, name, amount, unit } : row));
+    return true;
   };
   /** Removes a row and returns what is needed to undo it: { item, index } (null if not found). */
   const deleteShoppingItem = id => {
@@ -389,8 +444,13 @@ export const RecipeProvider = ({
     setSelectedCategory,
     searchQuery,
     setSearchQuery,
+    cookingSession,
     activeRecipeForCooking,
-    setActiveRecipeForCooking,
+    cookingStepIndex,
+    startCookingSession,
+    setCookingStep,
+    setCookingServings,
+    endCookingSession,
     addRecipe,
     updateRecipe,
     deleteRecipe,
@@ -401,9 +461,11 @@ export const RecipeProvider = ({
     pantryIngredients,
     togglePantryIngredient,
     clearPantry,
+    removePantryIngredients,
     shoppingList,
     addToShoppingList,
     toggleShoppingItem,
+    updateShoppingItem,
     deleteShoppingItem,
     restoreShoppingItem,
     clearCheckedShoppingItems,

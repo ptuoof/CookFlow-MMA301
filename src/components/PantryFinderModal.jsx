@@ -2,27 +2,17 @@ import React, { useMemo, useState } from 'react';
 import { Modal, View, Text, StyleSheet, ScrollView, Pressable, TextInput, Switch } from 'react-native';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
-import { containsPhrase, normalizeVi as normalize } from '../utils/text';
+import { normalizeVi as normalize } from '../utils/text';
 import { confirmAction, showAlert } from '../utils/dialog';
-
-// Basic seasonings most kitchens always have; optionally not counted as "missing".
-const STAPLES = ['muoi', 'duong', 'tieu', 'nuoc loc', 'dau an', 'hat nem', 'bot ngot', 'nuoc da'];
-export const isStapleIngredient = name => {
-  const key = normalize(name);
-  return STAPLES.some(staple => key === staple || key.startsWith(`${staple} `) || key.startsWith(`${staple},`));
-};
-
-// "Thịt bò" in the pantry covers "Thịt bò phi lê"; exact names always match.
-const isAvailable = (ingredientName, pantryKeys) => {
-  const key = normalize(ingredientName);
-  return pantryKeys.some(p => p === key || containsPhrase(key, p));
-};
+import { isInPantry as isAvailable, isStapleIngredient, pantryKeysOf } from '../utils/pantry';
 
 export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
-  const { recipes, pantryIngredients, togglePantryIngredient, clearPantry, addToShoppingList } = useRecipes();
+  const { recipes, pantryIngredients, togglePantryIngredient, clearPantry, addToShoppingList, settings, updateSettings } = useRecipes();
   const [query, setQuery] = useState('');
-  const [assumeStaples, setAssumeStaples] = useState(true);
-  const pantryKeys = useMemo(() => pantryIngredients.map(normalize).filter(Boolean), [pantryIngredients]);
+  // Shared with the recipe checklist, so both screens agree on what is "missing"
+  const assumeStaples = settings.assumeStaples;
+  const setAssumeStaples = value => updateSettings({ assumeStaples: value });
+  const pantryKeys = useMemo(() => pantryKeysOf(pantryIngredients), [pantryIngredients]);
   const trimmedQuery = query.trim();
   const canAddCustom = trimmedQuery.length > 1 && !pantryKeys.includes(normalize(trimmedQuery));
 

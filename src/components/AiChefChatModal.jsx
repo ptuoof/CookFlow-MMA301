@@ -29,6 +29,7 @@ export const AiChefChatModal = ({
   onClose,
   recipe,
   currentStep,
+  servings,
   initialQuestion
 }) => {
   const [apiKey, setApiKey] = useState(null);
@@ -110,6 +111,7 @@ export const AiChefChatModal = ({
         apiKey,
         recipe,
         currentStep,
+        servings,
         history,
         question: text,
         signal: controller.signal
@@ -161,6 +163,7 @@ export const AiChefChatModal = ({
       const changes = await extractIngredientChanges({
         apiKey,
         recipe: liveRecipe,
+        servings,
         question: message.question,
         answer: message.text,
         signal: controller.signal
