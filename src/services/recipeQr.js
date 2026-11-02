@@ -2,6 +2,8 @@
 // Recipes are serialized into a compact JSON payload (short keys + arrays) with a
 // version prefix. Vietnamese text is multi-byte in UTF-8, so the encoder degrades
 // detail level step by step until the payload fits a QR size phones can scan reliably.
+import { MINUTES_MAX, SERVINGS_MAX, SERVINGS_MIN, TIMER_SECONDS_MAX } from '../constants/limits';
+import { normalizeCategory } from '../utils/recipeModel';
 
 export const QR_PREFIX = 'CF1:';
 export const QR_MAX_BYTES = 1500;
@@ -121,7 +123,7 @@ const buildRecipe = fields => {
         stepNumber: idx + 1,
         title: cleanStr(step.title, `Bước ${idx + 1}`),
         instruction: cleanStr(step.instruction, cleanStr(step.title, `Bước ${idx + 1}`)),
-        timerSeconds: cleanNum(step.timerSeconds, 0, 24 * 3600)
+        timerSeconds: cleanNum(step.timerSeconds, 0, TIMER_SECONDS_MAX)
       };
       const tip = cleanStr(step.tip);
       if (tip) parsed.tip = tip;
@@ -139,10 +141,10 @@ const buildRecipe = fields => {
       cleanUrl(fields.imageUrl) ||
       'https://images.unsplash.com/photo-1495521821757-a1efb6729352?auto=format&fit=crop&w=800&q=80',
     videoUrl: cleanUrl(fields.videoUrl) || undefined,
-    category: cleanStr(fields.category, 'Món chính 🍲'),
-    prepTimeMinutes: cleanNum(fields.prepTimeMinutes, 0, 1440),
-    cookTimeMinutes: cleanNum(fields.cookTimeMinutes, 0, 1440),
-    servings: Math.max(1, cleanNum(fields.servings, 2, 100)),
+    category: normalizeCategory(cleanStr(fields.category)),
+    prepTimeMinutes: cleanNum(fields.prepTimeMinutes, 0, MINUTES_MAX),
+    cookTimeMinutes: cleanNum(fields.cookTimeMinutes, 0, MINUTES_MAX),
+    servings: Math.max(SERVINGS_MIN, cleanNum(fields.servings, 2, SERVINGS_MAX)),
     calories: cleanNum(fields.calories, 0, 10000) || undefined,
     difficulty: ['Dễ', 'Vừa', 'Khó'].includes(fields.difficulty) ? fields.difficulty : 'Vừa',
     colorAccent: cleanColor(fields.colorAccent),

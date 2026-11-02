@@ -9,7 +9,7 @@ import { ShareRecipeModal } from './ShareRecipeModal';
 import { scaleAmount } from '../utils/quantity';
 import { showAlert } from '../utils/dialog';
 import { hasTimer, hasVideo, totalMinutes } from '../utils/recipeModel';
-const MAX_SERVINGS = 50;
+import { SERVINGS_MAX as MAX_SERVINGS } from '../constants/limits';
 export const RecipeDetailModal = ({
   recipe: recipeProp,
   visible,

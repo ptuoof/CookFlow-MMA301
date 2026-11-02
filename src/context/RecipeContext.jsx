@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AppState, Platform, Vibration } from 'react-native';
 import * as Speech from 'expo-speech';
 import { INITIAL_RECIPES } from '../data/mockRecipes';
-import { makeId, normalizeRecipe, recipeSignature } from '../utils/recipeModel';
+import { makeId, normalizeRecipe, recipeSignature, relocateTimerStep } from '../utils/recipeModel';
 import { normalizeVi } from '../utils/text';
 import { addAmounts } from '../utils/quantity';
 import { showAlert } from '../utils/dialog';
@@ -219,6 +219,7 @@ export const RecipeProvider = ({
     setCookingTimer({
       recipeId: recipe.id,
       recipeTitle: recipe.title,
+      stepId: step.id,
       stepIndex,
       stepTitle: step.title,
       durationSeconds: duration,
@@ -266,14 +267,11 @@ export const RecipeProvider = ({
   const updateRecipe = updatedRecipe => {
     const normalized = normalizeRecipe({ ...updatedRecipe, updatedAt: new Date().toISOString() });
     if (!normalized) return;
+    const previous = recipes.find(r => r.id === normalized.id);
     setRecipes(prev => prev.map(r => r.id === normalized.id ? normalized : r));
     // Keep an open cooking session in sync with the edited content
     setActiveRecipeForCooking(active => active?.id === normalized.id ? normalized : active);
-    setCookingTimer(timer => {
-      if (timer?.recipeId !== normalized.id) return timer;
-      const step = normalized.steps[timer.stepIndex];
-      return step ? { ...timer, recipeTitle: normalized.title, stepTitle: step.title } : null;
-    });
+    setCookingTimer(timer => relocateTimerStep(timer, previous, normalized));
   };
   const deleteRecipe = id => {
     setRecipes(prev => prev.filter(r => r.id !== id));
@@ -338,8 +336,22 @@ export const RecipeProvider = ({
   const toggleShoppingItem = id => {
     setShoppingList(prev => prev.map(item => item.id === id ? { ...item, checked: !item.checked } : item));
   };
+  /** Removes a row and returns what is needed to undo it: { item, index } (null if not found). */
   const deleteShoppingItem = id => {
+    const index = shoppingRef.current.findIndex(item => item.id === id);
+    if (index < 0) return null;
+    const removed = { item: shoppingRef.current[index], index };
     setShoppingList(prev => prev.filter(item => item.id !== id));
+    return removed;
+  };
+  const restoreShoppingItem = removed => {
+    if (!removed?.item) return;
+    setShoppingList(prev => {
+      if (prev.some(item => item.id === removed.item.id)) return prev;
+      const next = [...prev];
+      next.splice(Math.min(removed.index, next.length), 0, removed.item);
+      return next;
+    });
   };
   const clearCheckedShoppingItems = () => {
     setShoppingList(prev => prev.filter(item => !item.checked));
@@ -393,6 +405,7 @@ export const RecipeProvider = ({
     addToShoppingList,
     toggleShoppingItem,
     deleteShoppingItem,
+    restoreShoppingItem,
     clearCheckedShoppingItems,
     addCustomShoppingItem,
     settings,
