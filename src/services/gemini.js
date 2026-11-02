@@ -8,7 +8,7 @@ import { scaleAmount } from '../utils/quantity';
 
 const STORAGE_KEY_GEMINI = '@cookflow_gemini_key'; // plain storage: web, and keys saved by older versions
 const SECURE_KEY_GEMINI = 'cookflow_gemini_key'; // SecureStore keys allow only [A-Za-z0-9._-]
-export const GEMINI_MODEL = 'gemini-flash-latest';
+export const GEMINI_MODEL = process.env.EXPO_PUBLIC_GEMINI_MODEL || 'gemini-3.5-flash-lite';
 export const GEMINI_KEY_URL = 'https://aistudio.google.com/apikey';
 const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const REQUEST_TIMEOUT_MS = 30000;

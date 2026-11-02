@@ -1,21 +1,27 @@
 // System notifications for step timers, so a timer still rings when the app is in background
 // or closed. While the app is open the in-app alert + voice already fire, so the banner is hidden.
 import { Platform } from 'react-native';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 
 const CHANNEL_ID = 'cookflow-timers';
-let module = null;
+let notifModule = null;
 let initialized = false;
 
+const isExpoGo =
+  Constants.appOwnership === 'expo' ||
+  Constants.executionEnvironment === ExecutionEnvironment?.StoreClient ||
+  Constants.executionEnvironment === 'storeClient';
+
 const load = () => {
-  if (Platform.OS === 'web') return null;
-  if (!module) {
+  if (Platform.OS === 'web' || isExpoGo) return null;
+  if (!notifModule) {
     try {
-      module = require('expo-notifications');
+      notifModule = require('expo-notifications');
     } catch {
-      module = null;
+      notifModule = null;
     }
   }
-  return module;
+  return notifModule;
 };
 
 /** Sets the foreground behavior and the Android channel; clears schedules left by an earlier run. */

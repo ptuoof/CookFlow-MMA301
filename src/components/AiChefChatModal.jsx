@@ -260,7 +260,7 @@ export const AiChefChatModal = ({
         <Pressable onPress={() => Linking.openURL(GEMINI_KEY_URL)} style={styles.linkBtn}>
           <Text style={styles.linkText}>↗ Lấy API key tại aistudio.google.com</Text>
         </Pressable>
-        <TextInput style={styles.keyInput} placeholder="Dán Gemini API key (AIza...)" placeholderTextColor={HeronColors.disable} value={keyDraft} onChangeText={setKeyDraft} autoCapitalize="none" autoCorrect={false} secureTextEntry />
+        <TextInput style={styles.keyInput} placeholder="Dán Gemini API key (AQ... hoặc AIza...)" placeholderTextColor={HeronColors.disable} value={keyDraft} onChangeText={setKeyDraft} autoCapitalize="none" autoCorrect={false} secureTextEntry />
         <AppleButton title="LƯU & BẮT ĐẦU HỎI" variant="primary" onPress={handleSaveKey} disabled={!keyDraft.trim()} style={{
         width: '100%'
       }} />
