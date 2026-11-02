@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
@@ -11,42 +11,49 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useRecipes } from '../context/RecipeContext';
 import { confirmAction } from '../utils/dialog';
 import { formatTimer } from './ui/TimerCircle';
+import { scaleAmount } from '../utils/quantity';
+import { pantryItemsUsedBy } from '../utils/pantry';
 const KEEP_AWAKE_TAG = 'cookflow-cooking-mode';
 const pad2 = n => String(n).padStart(2, '0');
+// The step being cooked lives in the context's cooking session (persisted), not in this screen
 export const CookingModeModal = ({
   recipe,
   visible,
-  onClose,
-  initialStepIndex = null
+  onClose
 }) => {
-  const { cookingTimer, timerSecondsLeft, clearTimer, settings, setActiveRecipeForCooking } = useRecipes();
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const {
+    cookingTimer, timerSecondsLeft, clearTimer, settings,
+    cookingSession, cookingStepIndex, setCookingStep, endCookingSession,
+    pantryIngredients, removePantryIngredients
+  } = useRecipes();
   const [isCelebrationVisible, setIsCelebrationVisible] = useState(false);
   const [viewMode, setViewMode] = useState('video');
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [showIngredients, setShowIngredients] = useState(false);
+  // Pantry entries the user marks as used up when the dish is done
+  const [usedUp, setUsedUp] = useState({});
   const totalSteps = recipe?.steps?.length ?? 0;
-  const safeStepIndex = Math.min(currentStepIndex, Math.max(0, totalSteps - 1));
+  const safeStepIndex = cookingStepIndex;
   const currentStep = recipe?.steps?.[safeStepIndex];
   const progressPercent = totalSteps ? Math.round((safeStepIndex + 1) / totalSteps * 100) : 0;
   const isLastStep = safeStepIndex === totalSteps - 1;
   const timerOfThisRecipe = cookingTimer && cookingTimer.recipeId === recipe?.id ? cookingTimer : null;
+  // Servings chosen on the detail screen: ingredient amounts and the AI follow them
+  const servings = cookingSession?.servings ?? recipe?.servings ?? 1;
+  const ratio = servings / Math.max(1, recipe?.servings || 1);
+  const usedPantryItems = useMemo(() => recipe ? pantryItemsUsedBy(recipe, pantryIngredients) : [], [recipe, pantryIngredients]);
   useEffect(() => {
-    setCurrentStepIndex(0);
     setVoiceEnabled(false);
     setIsCelebrationVisible(false);
     setViewMode('video');
+    setShowIngredients(false);
+    setUsedUp({});
   }, [recipe?.id]);
-  // Reopened from the floating timer: jump to the step that owns the timer
-  useEffect(() => {
-    if (visible && initialStepIndex != null && initialStepIndex < totalSteps) {
-      setCurrentStepIndex(initialStepIndex);
-    }
-  }, [visible, initialStepIndex, totalSteps]);
   // Optional custom timer tab only applies to the step where it was opened
   useEffect(() => {
     setViewMode('video');
-  }, [currentStepIndex]);
+  }, [safeStepIndex]);
   // Keep the screen on while cooking (setting in Cài đặt)
   useEffect(() => {
     if (!visible || !settings.keepAwake || Platform.OS === 'web') return undefined;
@@ -70,16 +77,30 @@ export const CookingModeModal = ({
   };
   if (!recipe || !currentStep) return null;
   const handleNext = () => {
-    if (isLastStep) {
-      Speech.stop();
-      setIsCelebrationVisible(true);
-    } else {
-      setCurrentStepIndex(Math.min(totalSteps - 1, safeStepIndex + 1));
+    const advance = () => {
+      if (isLastStep) {
+        Speech.stop();
+        setIsCelebrationVisible(true);
+      } else {
+        setCookingStep(safeStepIndex + 1);
+      }
+    };
+    // Leaving a step whose timer is still counting is allowed, but never by accident
+    if (timerOfThisRecipe?.status === 'running' && timerOfThisRecipe.stepIndex === safeStepIndex) {
+      confirmAction({
+        title: 'Timer bước này vẫn đang chạy',
+        message: `Còn ${formatTimer(timerSecondsLeft)}. Timer vẫn tiếp tục đếm và sẽ báo khi hết giờ.`,
+        confirmText: isLastStep ? 'Vẫn hoàn thành' : 'Sang bước tiếp',
+        cancelText: 'Ở lại',
+        onConfirm: advance
+      });
+      return;
     }
+    advance();
   };
   const handlePrev = () => {
     if (safeStepIndex > 0) {
-      setCurrentStepIndex(safeStepIndex - 1);
+      setCookingStep(safeStepIndex - 1);
     }
   };
   const handleExit = () => {
@@ -88,7 +109,7 @@ export const CookingModeModal = ({
       title: 'Tạm rời chế độ nấu?',
       message: timerActive
         ? `Timer "${timerOfThisRecipe.stepTitle}" vẫn tiếp tục chạy (${formatTimer(timerSecondsLeft)}). Bạn có thể mở lại từ thanh timer ở màn hình chính.`
-        : 'Tiến độ bước hiện tại được giữ lại cho đến khi bạn chọn món khác.',
+        : `Tiến độ (bước ${safeStepIndex + 1}/${totalSteps}) được lưu lại, kể cả khi tắt ứng dụng. Mở lại từ thẻ "Đang nấu dở" ở màn hình chính.`,
       confirmText: 'Rời đi',
       cancelText: 'Tiếp tục nấu',
       onConfirm: () => {
@@ -100,9 +121,10 @@ export const CookingModeModal = ({
   const handleFinishCooking = () => {
     Speech.stop();
     if (timerOfThisRecipe) clearTimer();
+    removePantryIngredients(usedPantryItems.filter(name => usedUp[name]));
     setIsCelebrationVisible(false);
-    setCurrentStepIndex(0);
-    setActiveRecipeForCooking(null);
+    setUsedUp({});
+    endCookingSession();
     onClose();
   };
   return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} onRequestClose={handleExit}>
@@ -163,6 +185,23 @@ export const CookingModeModal = ({
               </Text>
             </Pressable>
           </View>
+
+          {/* Ingredients scaled to the servings being cooked */}
+          <Pressable accessibilityRole="button" accessibilityState={{ expanded: showIngredients }} onPress={() => setShowIngredients(open => !open)} style={styles.ingredientsToggle}>
+            <Text style={styles.ingredientsToggleText}>
+              🧾 NGUYÊN LIỆU CHO {servings} NGƯỜI{servings !== recipe.servings ? ` (GỐC ${recipe.servings})` : ''}
+            </Text>
+            <Text style={styles.ingredientsToggleText}>{showIngredients ? '▴' : '▾'}</Text>
+          </Pressable>
+          {showIngredients ? <View style={styles.ingredientsPanel}>
+              {recipe.ingredients.map(item => <View key={item.id} style={styles.ingredientLine}>
+                  <Text style={styles.ingredientName}>{item.name}</Text>
+                  <Text style={styles.ingredientAmount}>{scaleAmount(item.amount, ratio)} {item.unit}</Text>
+                </View>)}
+              {ratio !== 1 ? <Text style={styles.ingredientsNote}>
+                  Định lượng trong lời hướng dẫn từng bước được viết cho {recipe.servings} người — hãy dùng số ở bảng này.
+                </Text> : null}
+            </View> : null}
 
           {/* Main Step Card */}
           <View style={styles.stepCard}>
@@ -236,6 +275,16 @@ export const CookingModeModal = ({
                 </Text>
               </View>
 
+              {usedPantryItems.length ? <View style={styles.usedUpBox}>
+                  <Text style={styles.usedUpTitle}>Nguyên liệu nào trong tủ lạnh đã dùng hết?</Text>
+                  <View style={styles.usedUpChips}>
+                    {usedPantryItems.map(name => <Pressable key={name} accessibilityRole="checkbox" accessibilityState={{ checked: !!usedUp[name] }} onPress={() => setUsedUp(prev => ({ ...prev, [name]: !prev[name] }))} style={[styles.usedUpChip, usedUp[name] && styles.usedUpChipActive]}>
+                        <Text style={[styles.usedUpChipText, usedUp[name] && styles.usedUpChipTextActive]}>{usedUp[name] ? '✓ ' : ''}{name}</Text>
+                      </Pressable>)}
+                  </View>
+                  <Text style={styles.usedUpHint}>Mục đã chọn sẽ được bỏ khỏi tủ lạnh khi xác nhận.</Text>
+                </View> : null}
+
               <AppleButton title="XÁC NHẬN & QUAY VỀ TRANG CHỦ" size="lg" variant="primary" onPress={handleFinishCooking} style={{
             width: '100%'
           }} />
@@ -245,11 +294,98 @@ export const CookingModeModal = ({
             </View>
           </View>}
 
-        <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={recipe} currentStep={currentStep} />
+        <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={recipe} currentStep={currentStep} servings={servings} />
       </SafeAreaView>
     </Modal>;
 };
 const styles = StyleSheet.create({
+  ingredientsToggle: {
+    minHeight: 44,
+    marginTop: 12,
+    paddingHorizontal: 16,
+    borderRadius: Radius.md,
+    backgroundColor: HeronColors.card,
+    borderWidth: 1,
+    borderColor: HeronColors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between'
+  },
+  ingredientsToggleText: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    color: HeronColors.inkPrimary
+  },
+  ingredientsPanel: {
+    marginTop: 8,
+    padding: 14,
+    borderRadius: Radius.md,
+    backgroundColor: HeronColors.card,
+    borderWidth: 1,
+    borderColor: HeronColors.borderLight,
+    gap: 8
+  },
+  ingredientLine: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12
+  },
+  ingredientName: {
+    flex: 1,
+    fontSize: 14,
+    color: HeronColors.inkPrimary
+  },
+  ingredientAmount: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: HeronColors.brand
+  },
+  ingredientsNote: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 18,
+    color: HeronColors.granite
+  },
+  usedUpBox: {
+    width: '100%',
+    marginBottom: 16,
+    gap: 8
+  },
+  usedUpTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: HeronColors.inkPrimary
+  },
+  usedUpChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6
+  },
+  usedUpChip: {
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: HeronColors.border,
+    justifyContent: 'center'
+  },
+  usedUpChipActive: {
+    backgroundColor: HeronColors.inkPrimary,
+    borderColor: HeronColors.inkPrimary
+  },
+  usedUpChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: HeronColors.secondary
+  },
+  usedUpChipTextActive: {
+    color: '#FFFFFF'
+  },
+  usedUpHint: {
+    fontSize: 12,
+    color: HeronColors.granite
+  },
   celebrationBack: {
     marginTop: 12,
     minHeight: 44,

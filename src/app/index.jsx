@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRecipes } from '../context/RecipeContext';
@@ -16,13 +16,18 @@ import { PantryFinderModal } from '../components/PantryFinderModal';
 import { FloatingTimerWidget } from '../components/ui/FloatingTimerWidget';
 import { matchesSearch } from '../utils/text';
 import { hasTimer, hasVideo, totalMinutes } from '../utils/recipeModel';
-import { showAlert } from '../utils/dialog';
+import { confirmAction, showAlert } from '../utils/dialog';
 import { CATEGORIES } from '../types/recipe';
 export default function AppMainScreen() {
   const {
     recipes,
     activeRecipeForCooking,
-    setActiveRecipeForCooking,
+    cookingSession,
+    cookingStepIndex,
+    startCookingSession,
+    setCookingStep,
+    setCookingServings,
+    endCookingSession,
     selectedCategory,
     setSelectedCategory,
     searchQuery,
@@ -35,8 +40,6 @@ export default function AppMainScreen() {
     cookingTimer,
     getRecipeById
   } = useRecipes();
-  const [cookingStartStep, setCookingStartStep] = useState(null);
-
   // Navigation tab state: 'explore' | 'myRecipes'
   const [currentTab, setCurrentTab] = useState('explore');
 
@@ -45,6 +48,8 @@ export default function AppMainScreen() {
   const [isCookingVisible, setIsCookingVisible] = useState(false);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState(null);
+  // Recipe whose copy is being created ("Tạo bản sao để chỉnh")
+  const [templateRecipe, setTemplateRecipe] = useState(null);
   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
   const [isOnboardingVisible, setIsOnboardingVisible] = useState(false);
   const [isShoppingListVisible, setIsShoppingListVisible] = useState(false);
@@ -63,26 +68,76 @@ export default function AppMainScreen() {
   const featuredRecipe = recipes.find(r => !r.isCustom) || recipes[0];
   const pendingShoppingCount = shoppingList.filter(item => !item.checked).length;
   const isFiltering = searchQuery.trim() !== '' || selectedCategory !== 'Tất cả';
-  const openCooking = (recipe, stepIndex = null) => {
+  // iOS cannot present a modal or alert while another modal is still dismissing
+  const afterModalDismiss = fn => {
+    if (Platform.OS === 'ios') setTimeout(fn, 450);
+    else fn();
+  };
+  // The session ended elsewhere (dish finished, recipe deleted): the cooking screen is gone too
+  useEffect(() => {
+    if (!activeRecipeForCooking) setIsCookingVisible(false);
+  }, [activeRecipeForCooking]);
+  const switchCookingTo = (recipe, start) => {
+    const current = activeRecipeForCooking;
+    if (!current || current.id === recipe.id) return start();
+    return confirmAction({
+      title: 'Đang nấu dở món khác',
+      message: `"${current.title}" đang ở bước ${cookingStepIndex + 1}/${current.steps.length}. Bắt đầu món mới sẽ kết thúc phiên nấu đó.`,
+      confirmText: 'Nấu món mới',
+      cancelText: 'Giữ nguyên',
+      onConfirm: start
+    });
+  };
+  /** Starts (or resumes) cooking a recipe for the servings chosen on its detail screen. */
+  const openCooking = (recipe, servings) => {
     if (!recipe?.steps?.length) {
       showAlert('Chưa có bước nấu', 'Công thức này chưa có bước hướng dẫn nào. Hãy sửa công thức để thêm bước trước khi nấu.');
       return;
     }
-    setActiveRecipeForCooking(recipe);
-    setCookingStartStep(stepIndex);
-    // iOS cannot present a modal while another one is still dismissing
-    if (Platform.OS === 'ios') setTimeout(() => setIsCookingVisible(true), 450);
-    else setIsCookingVisible(true);
+    const restart = () => {
+      startCookingSession(recipe, { servings });
+      setIsCookingVisible(true);
+    };
+    if (activeRecipeForCooking?.id === recipe.id && cookingStepIndex > 0) {
+      confirmAction({
+        title: 'Tiếp tục món đang nấu?',
+        message: `Bạn đang ở bước ${cookingStepIndex + 1}/${recipe.steps.length}. Chọn "Tiếp tục" để quay lại bước đó, hoặc "Nấu lại từ đầu".`,
+        confirmText: 'Tiếp tục',
+        cancelText: 'Nấu lại từ đầu',
+        onConfirm: () => {
+          if (servings) setCookingServings(servings);
+          setIsCookingVisible(true);
+        },
+        onCancel: restart
+      });
+      return;
+    }
+    switchCookingTo(recipe, restart);
   };
   const reopenTimerStep = () => {
     const recipe = cookingTimer ? getRecipeById(cookingTimer.recipeId) : null;
     if (!recipe) return;
-    setActiveRecipeForCooking(recipe);
-    setCookingStartStep(cookingTimer.stepIndex);
-    setIsCookingVisible(true);
+    switchCookingTo(recipe, () => {
+      if (activeRecipeForCooking?.id === recipe.id) setCookingStep(cookingTimer.stepIndex);
+      else startCookingSession(recipe, { stepIndex: cookingTimer.stepIndex });
+      setIsCookingVisible(true);
+    });
   };
+  const handleEndSession = () => confirmAction({
+    title: 'Kết thúc phiên nấu?',
+    message: `Tiến độ nấu "${activeRecipeForCooking?.title}" sẽ không được lưu nữa.`,
+    confirmText: 'Kết thúc',
+    destructive: true,
+    onConfirm: endCookingSession
+  });
   const handleEditRecipe = recipe => {
+    setTemplateRecipe(null);
     setEditingRecipe(recipe);
+    setIsCreateModalVisible(true);
+  };
+  const handleDuplicateRecipe = recipe => {
+    setEditingRecipe(null);
+    setTemplateRecipe(recipe);
     setIsCreateModalVisible(true);
   };
   return <SafeAreaView style={styles.safeArea}>
@@ -143,6 +198,20 @@ export default function AppMainScreen() {
         </View>
 
         {currentTab === 'explore' ? <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+            {/* A dish in progress survives closing Cooking Mode and restarting the app */}
+            {activeRecipeForCooking && !isCookingVisible ? <View style={styles.resumeCard}>
+                <Pressable accessibilityRole="button" accessibilityLabel={`Tiếp tục nấu ${activeRecipeForCooking.title}`} onPress={() => setIsCookingVisible(true)} style={styles.resumeMain}>
+                  <Text style={styles.resumeTag}>ĐANG NẤU DỞ</Text>
+                  <Text style={styles.resumeTitle} numberOfLines={1}>{activeRecipeForCooking.title}</Text>
+                  <Text style={styles.resumeMeta}>
+                    Bước {cookingStepIndex + 1}/{activeRecipeForCooking.steps.length} • {cookingSession?.servings} người • Chạm để tiếp tục ›
+                  </Text>
+                </Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel="Kết thúc phiên nấu" hitSlop={8} onPress={handleEndSession} style={styles.resumeClose}>
+                  <Text style={styles.resumeCloseText}>✕</Text>
+                </Pressable>
+              </View> : null}
+
             {/* Heron Precision Search Bar */}
             <View style={styles.searchBar}>
               <Text style={styles.searchIcon}>⌕</Text>
@@ -334,6 +403,7 @@ export default function AppMainScreen() {
             {/* Tab 2: Nút Tạo món ở giữa (Heron Flame Accent) */}
             <Pressable onPress={() => {
             setEditingRecipe(null);
+            setTemplateRecipe(null);
             setIsCreateModalVisible(true);
           }} style={({
             pressed
@@ -355,16 +425,26 @@ export default function AppMainScreen() {
         </View>
 
         {/* Modals */}
-        <RecipeDetailModal recipe={selectedRecipeForDetail} visible={!!selectedRecipeForDetail} onClose={() => setSelectedRecipeForDetail(null)} onStartCooking={rec => openCooking(rec)} />
+        <RecipeDetailModal
+          recipe={selectedRecipeForDetail}
+          visible={!!selectedRecipeForDetail}
+          onClose={() => setSelectedRecipeForDetail(null)}
+          onStartCooking={(rec, servings) => afterModalDismiss(() => openCooking(rec, servings))}
+          onEditRecipe={rec => {
+            setSelectedRecipeForDetail(null);
+            afterModalDismiss(() => handleEditRecipe(rec));
+          }}
+          onDuplicateRecipe={rec => {
+            setSelectedRecipeForDetail(null);
+            afterModalDismiss(() => handleDuplicateRecipe(rec));
+          }}
+        />
 
-        <CookingModeModal recipe={activeRecipeForCooking} visible={!!activeRecipeForCooking && isCookingVisible} initialStepIndex={cookingStartStep} onClose={() => {
-        setIsCookingVisible(false);
-        setCookingStartStep(null);
-      }} />
+        <CookingModeModal recipe={activeRecipeForCooking} visible={!!activeRecipeForCooking && isCookingVisible} onClose={() => setIsCookingVisible(false)} />
 
         {!isCookingVisible ? <FloatingTimerWidget onPress={reopenTimerStep} bottomOffset={100} /> : null}
 
-        <CreateRecipeModal visible={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} editingRecipe={editingRecipe} />
+        <CreateRecipeModal visible={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} editingRecipe={editingRecipe} templateRecipe={templateRecipe} />
 
         <SettingsModal visible={isSettingsModalVisible} onClose={() => setIsSettingsModalVisible(false)} onReopenOnboarding={() => setTimeout(() => setIsOnboardingVisible(true), Platform.OS === 'ios' ? 450 : 0)} />
 
@@ -385,6 +465,49 @@ export default function AppMainScreen() {
     </SafeAreaView>;
 }
 const styles = StyleSheet.create({
+  resumeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    borderRadius: Radius.lg,
+    backgroundColor: HeronColors.primary,
+    ...HeronShadow.card
+  },
+  resumeMain: {
+    flex: 1,
+    paddingVertical: 14,
+    paddingLeft: 18,
+    gap: 2
+  },
+  resumeTag: {
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+    color: HeronColors.brand
+  },
+  resumeTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#FFFFFF'
+  },
+  resumeMeta: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.75)'
+  },
+  resumeClose: {
+    width: 48,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderLeftWidth: 1,
+    borderLeftColor: 'rgba(255,255,255,0.2)'
+  },
+  resumeCloseText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 16
+  },
   resetFilterBtn: {
     marginTop: 14,
     minHeight: 44,

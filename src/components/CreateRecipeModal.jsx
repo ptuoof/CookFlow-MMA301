@@ -13,6 +13,7 @@ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
 const CATEGORIES = ALL_CATEGORIES.filter(cat => cat !== 'Tất cả');
 const DIFFICULTIES = ['Dễ', 'Vừa', 'Khó'];
+const COPY_SUFFIX = ' (bản sao)';
 const emptyIngredient = () => ({ id: makeId('i'), name: '', amount: '', unit: 'gram' });
 const emptyStep = title => ({ id: makeId('s'), title, instruction: '', timerMinutes: '', tip: '' });
 
@@ -62,11 +63,13 @@ const snapshotOf = form => JSON.stringify([
 export const CreateRecipeModal = ({
   visible,
   onClose,
-  editingRecipe
+  editingRecipe,
+  templateRecipe
 }) => {
   const {
     addRecipe,
-    updateRecipe
+    updateRecipe,
+    findDuplicateRecipe
   } = useRecipes();
 
   // Recipe basic info
@@ -108,8 +111,11 @@ export const CreateRecipeModal = ({
     initialSnapshotRef.current = snapshotOf(form);
   };
   useEffect(() => {
-    applyFormState(toFormState(editingRecipe));
-  }, [editingRecipe, visible]);
+    if (editingRecipe) applyFormState(toFormState(editingRecipe));
+    // A copy starts from the template's values; nothing is saved until the user taps Lưu
+    else if (templateRecipe) applyFormState({ ...toFormState(templateRecipe), title: `${templateRecipe.title}${COPY_SUFFIX}` });
+    else applyFormState(toFormState(null));
+  }, [editingRecipe, templateRecipe, visible]);
   const resetForm = () => applyFormState(toFormState(null));
 
   // Image & Video Picker Handlers
@@ -313,15 +319,35 @@ export const CreateRecipeModal = ({
       ingredients: validIngredients,
       steps: validSteps
     };
-    if (editingRecipe) {
-      updateRecipe({ ...editingRecipe, ...payload });
-      showAlert('Thành công! 🎉', 'Công thức của bạn đã được cập nhật.');
-    } else {
-      addRecipe({ ...payload, colorAccent: HeronColors.brand });
-      showAlert('Thành công! 🎉', 'Món mới đã được lưu vào mục "Của tôi → Tự tạo".');
+    const commit = () => {
+      if (editingRecipe) {
+        updateRecipe({ ...editingRecipe, ...payload });
+        showAlert('Thành công! 🎉', 'Công thức của bạn đã được cập nhật.');
+      } else if (templateRecipe) {
+        // Keep fields the form does not edit (calories, accent color); the copy stands on its own
+        const { id, isCustom, createdAt, updatedAt, variantOf, aiChanges, copiedFrom, ...rest } = templateRecipe;
+        addRecipe({ ...rest, ...payload, copiedFrom: id, colorAccent: rest.colorAccent || HeronColors.brand });
+        showAlert('Đã tạo bản sao 🎉', `"${payload.title}" đã được lưu vào mục "Của tôi → Tự tạo". Công thức gốc giữ nguyên.`);
+      } else {
+        addRecipe({ ...payload, colorAccent: HeronColors.brand });
+        showAlert('Thành công! 🎉', 'Món mới đã được lưu vào mục "Của tôi → Tự tạo".');
+      }
+      resetForm();
+      onClose();
+    };
+    // Same title + same ingredient set as an existing recipe: probably saved twice by mistake
+    const duplicate = editingRecipe ? null : findDuplicateRecipe(payload);
+    if (duplicate) {
+      confirmAction({
+        title: 'Món này đã có trong danh sách',
+        message: `"${duplicate.title}" có cùng tên và bộ nguyên liệu. Vẫn lưu thành món mới?`,
+        confirmText: 'Vẫn lưu',
+        cancelText: 'Xem lại',
+        onConfirm: commit
+      });
+      return;
     }
-    resetForm();
-    onClose();
+    commit();
   };
   const handleRequestClose = () => {
     // Any edited field counts (amounts, timers, tips, media...), not only the title or row count
@@ -355,7 +381,7 @@ export const CreateRecipeModal = ({
             <View style={styles.headerTitleWrap}>
               <Text style={styles.headerSubtitle}>COOKFLOW // STUDIO</Text>
               <Text style={styles.headerTitle}>
-                {editingRecipe ? 'Sửa Công Thức' : 'Tạo Món Ăn Mới'}
+                {editingRecipe ? 'Sửa Công Thức' : templateRecipe ? 'Tạo Bản Sao' : 'Tạo Món Ăn Mới'}
               </Text>
             </View>
             <Pressable onPress={handleSave} disabled={isSaving} style={styles.saveBtn}>

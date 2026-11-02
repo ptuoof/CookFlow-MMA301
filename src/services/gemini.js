@@ -2,6 +2,7 @@
 // The API key comes from the user (saved locally) or EXPO_PUBLIC_GEMINI_API_KEY in .env.
 // Get a free key at https://aistudio.google.com/apikey
 import { safeStorage } from '../context/RecipeContext';
+import { scaleAmount } from '../utils/quantity';
 
 const STORAGE_KEY_GEMINI = '@cookflow_gemini_key';
 export const GEMINI_MODEL = 'gemini-flash-latest';
@@ -19,24 +20,33 @@ export const saveGeminiApiKey = key => safeStorage.setItem(STORAGE_KEY_GEMINI, k
 
 export const clearGeminiApiKey = () => safeStorage.removeItem(STORAGE_KEY_GEMINI);
 
-const describeRecipe = (recipe, currentStep) => {
+// True when the user cooks for a different number of people than the recipe was written for
+const isRescaled = (recipe, servings) => !!servings && servings !== recipe.servings;
+
+const describeRecipe = (recipe, currentStep, servings) => {
   if (!recipe) return 'Người dùng chưa chọn món cụ thể.';
-  const ingredients = recipe.ingredients.map(i => `- ${i.name}: ${i.amount} ${i.unit}`).join('\n');
+  const rescaled = isRescaled(recipe, servings);
+  const ratio = rescaled ? servings / Math.max(1, recipe.servings) : 1;
+  const ingredients = recipe.ingredients.map(i => `- ${i.name}: ${scaleAmount(i.amount, ratio)} ${i.unit}`).join('\n');
   const steps = recipe.steps.map(s => `${s.stepNumber}. ${s.title}: ${s.instruction}`).join('\n');
   const lines = [
-    `Món: ${recipe.title} (${recipe.category}, độ khó ${recipe.difficulty}, ${recipe.servings} người ăn, ` +
+    `Món: ${recipe.title} (${recipe.category}, độ khó ${recipe.difficulty}, ${rescaled ? servings : recipe.servings} người ăn, ` +
       `${recipe.prepTimeMinutes + recipe.cookTimeMinutes} phút${recipe.calories ? `, ~${recipe.calories} kcal/phần` : ''})`,
     `Mô tả: ${recipe.description}`,
-    `Nguyên liệu:\n${ingredients}`,
+    `Nguyên liệu${rescaled ? ` (đã quy đổi cho ${servings} người)` : ''}:\n${ingredients}`,
     `Các bước:\n${steps}`
   ];
+  if (rescaled) {
+    lines.push(`Lưu ý: công thức gốc viết cho ${recipe.servings} người; người dùng đang nấu cho ${servings} người. ` +
+      'Định lượng nhắc trong các bước là của bản gốc — khi tư vấn, luôn tính theo danh sách nguyên liệu đã quy đổi ở trên.');
+  }
   if (currentStep) {
     lines.push(`Người dùng đang ở BƯỚC ${currentStep.stepNumber}: ${currentStep.title} — ${currentStep.instruction}`);
   }
   return lines.join('\n\n');
 };
 
-const buildSystemPrompt = (recipe, currentStep) =>
+const buildSystemPrompt = (recipe, currentStep, servings) =>
   [
     'Bạn là "CookFlow AI Sous-Chef" — phụ bếp AI thân thiện, giàu kinh nghiệm ẩm thực Việt Nam và quốc tế.',
     'Luôn trả lời bằng tiếng Việt, ngắn gọn (tối đa khoảng 180 từ), thực tế, dễ làm tại bếp gia đình.',
@@ -48,7 +58,7 @@ const buildSystemPrompt = (recipe, currentStep) =>
     'Nếu câu hỏi không liên quan đến nấu ăn, lịch sự hướng người dùng quay lại chủ đề bếp núc.',
     '',
     'Ngữ cảnh công thức hiện tại:',
-    describeRecipe(recipe, currentStep)
+    describeRecipe(recipe, currentStep, servings)
   ].join('\n');
 
 const errorMessageFor = (status, body) => {
@@ -120,10 +130,10 @@ const generateContent = async ({ apiKey, systemPrompt, messages, generationConfi
  * @param history previous messages [{ role: 'user' | 'model', text }]
  * @returns the assistant reply text. Throws Error with a user-facing message on failure.
  */
-export const askSousChef = async ({ apiKey, recipe, currentStep, history = [], question, signal }) => {
+export const askSousChef = async ({ apiKey, recipe, currentStep, servings, history = [], question, signal }) => {
   const text = await generateContent({
     apiKey,
-    systemPrompt: buildSystemPrompt(recipe, currentStep),
+    systemPrompt: buildSystemPrompt(recipe, currentStep, servings),
     messages: [...history.slice(-MAX_HISTORY_MESSAGES), { role: 'user', text: question }],
     generationConfig: { temperature: 0.7 },
     signal
@@ -162,8 +172,11 @@ const CHANGES_SCHEMA = {
   required: ['changes']
 };
 
-const buildExtractionPrompt = recipe =>
+const buildExtractionPrompt = (recipe, servings) =>
   [
+    ...(isRescaled(recipe, servings)
+      ? [`Câu trả lời được viết cho ${servings} người, nhưng định lượng trong JSON PHẢI quy đổi về khẩu phần gốc ${recipe.servings} người của công thức.`]
+      : []),
     'Bạn là bộ chuyển đổi dữ liệu cho ứng dụng nấu ăn CookFlow.',
     'Đọc câu trả lời của phụ bếp AI và chuyển các gợi ý THAY THẾ hoặc ĐỔI ĐỊNH LƯỢNG nguyên liệu thành JSON.',
     'Quy tắc:',
@@ -186,10 +199,10 @@ const cleanText = (value, max = 80) => (typeof value === 'string' || typeof valu
  * Only changes pointing at real ingredient ids are kept (one per ingredient).
  * @returns [{ replacesId, original, items: [{ name, amount, unit }], reason }]
  */
-export const extractIngredientChanges = async ({ apiKey, recipe, question, answer, signal }) => {
+export const extractIngredientChanges = async ({ apiKey, recipe, servings, question, answer, signal }) => {
   const text = await generateContent({
     apiKey,
-    systemPrompt: buildExtractionPrompt(recipe),
+    systemPrompt: buildExtractionPrompt(recipe, servings),
     messages: [
       { role: 'user', text: `Câu hỏi của người dùng: ${question}\n\nCâu trả lời của phụ bếp AI:\n${answer}` }
     ],

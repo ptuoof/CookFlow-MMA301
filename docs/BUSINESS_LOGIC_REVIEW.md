@@ -75,3 +75,21 @@ Mức độ: **Cao** = sai dữ liệu / kẹt luồng; **TB** = hành vi sai l�
 Quy tắc cập nhật: khẩu phần 1–50, thời gian sơ chế/nấu 0–1440 phút, timer mỗi bước tối đa 600 phút — áp dụng cho mọi nguồn (form, QR, AI, dữ liệu lưu).
 
 Kiểm thử: `npm run test:logic` — 10 nhóm (thêm step id, timer theo bước, danh mục/giới hạn), đều đạt. Chưa chạy được Expo CLI/Metro trên máy rà soát (Node 20.12 < 20.19.4 yêu cầu, thiếu `expo-camera` trong `node_modules`) → cần thử tay: sửa món đang chạy timer (chèn/xóa bước), Hủy sau khi chỉ sửa định lượng, chọn ảnh từ album rồi khởi động lại app, xóa dòng giỏ rồi Hoàn tác.
+
+## 7. Đợt 3 — nhóm P1 (02/11/2026)
+
+| # | Hạng mục | Thay đổi |
+|---|---|---|
+| 26 | Danh mục đơn vị | `src/utils/units.js`: mỗi đơn vị có một cách viết chuẩn ("gram", "gr" → "g"; "thìa canh" → "muỗng canh"), đơn vị lạ giữ nguyên. Công thức và giỏ đi chợ lưu đơn vị chuẩn. |
+| 27 | Gộp giỏ đi chợ theo quy đổi | `src/utils/shopping.js`: dòng chưa mua cùng tên được cộng khi cùng đơn vị hoặc cùng nhóm (g ↔ kg, ml ↔ lít); 300 g + 0,5 kg = 800 g. Chỉ đổi sang kg/lít khi hiển thị không mất độ chính xác (1250 ml giữ nguyên, không thành "1,3 lít"). |
+| 28 | Sửa dòng giỏ | Nút ✎ (hoặc nhấn giữ) mở form sửa tên / số lượng / đơn vị, có chip đơn vị gợi ý. |
+| 29 | Đã mua → Tủ lạnh | Đánh dấu "đã mua" tự thêm nguyên liệu vào tủ lạnh (cài đặt "Tự cất vào tủ lạnh", mặc định bật). Bỏ đánh dấu chỉ gỡ khỏi tủ nếu chính dòng đó đã thêm vào và không còn dòng đã mua cùng tên. |
+| 30 | Tủ lạnh → Checklist | Mở chi tiết món: nguyên liệu có trong tủ lạnh (và gia vị cơ bản, nếu bật) được tick sẵn "đã có", nên "Thêm vào giỏ" chỉ đưa phần thực sự thiếu. Công tắc "Coi gia vị cơ bản là có sẵn" chuyển vào Cài đặt, dùng chung với Pantry Finder. |
+| 31 | Nấu xong → Trừ tủ lạnh | Màn hoàn thành món liệt kê nguyên liệu trong tủ mà món đã dùng; mục được chọn "đã dùng hết" bị bỏ khỏi tủ khi xác nhận. Không tự trừ vì tủ lạnh chưa lưu số lượng. |
+| 32 | Phiên nấu lưu bền | `cookingSession` trong context (`@cookflow_cooking_session_v1`): món, khẩu phần, bước (theo `stepId`). Đóng app vẫn tiếp tục được qua thẻ "ĐANG NẤU DỞ" ở màn chính. Nấu món khác khi đang dở → hỏi; mở lại món đang dở → "Tiếp tục" hoặc "Nấu lại từ đầu". Sửa món đang nấu vẫn giữ đúng bước. |
+| 33 | Khẩu phần xuyên suốt | Khẩu phần chọn ở chi tiết món được truyền sang Cooking Mode (bảng nguyên liệu đã quy đổi) và AI (prompt nhận định lượng đã quy đổi; phần trích xuất thay thế quy về khẩu phần gốc trước khi lưu biến thể). |
+| 34 | Cảnh báo timer khi sang bước | Bấm "Bước tiếp theo"/"Hoàn thành" khi timer của bước hiện tại còn chạy → hỏi xác nhận (timer vẫn tiếp tục). |
+| 35 | Tạo bản sao | Nút "⧉ Tạo bản sao để chỉnh" ở chi tiết món (kể cả món có sẵn): mở form đã điền sẵn, chỉ lưu khi bấm Lưu, ghi `copiedFrom`. Món tự tạo có thêm nút "✎ Sửa công thức". |
+| 36 | Cảnh báo trùng khi tạo | Tạo món / bản sao trùng tên + bộ nguyên liệu với món đã có → hỏi trước khi lưu. |
+
+Kiểm thử: `npm run test:logic` — 14 nhóm (thêm đơn vị, gộp giỏ, tủ lạnh, phiên nấu), đều đạt. ESLint (cấu hình Expo, chạy tạm) không báo biến chưa khai báo trong code mới. Vẫn chưa chạy được Expo/Metro trên máy rà soát → cần thử tay: tick "đã mua" rồi mở món dùng nguyên liệu đó; nấu dở rồi tắt app, mở lại; chọn 4 người ở chi tiết rồi xem bảng nguyên liệu trong Cooking Mode; tạo bản sao món có sẵn rồi Hủy (không được tạo món).

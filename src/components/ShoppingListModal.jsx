@@ -4,7 +4,10 @@ import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
 import { groupShoppingItemsByAisle } from '../utils/groceryAisles';
 import { confirmAction, showAlert } from '../utils/dialog';
+import { UNIT_SUGGESTIONS } from '../utils/units';
 const UNDO_TIMEOUT_MS = 5000;
+const AMOUNT_PATTERN = /^\d+([.,]\d+)?(\/\d+)?$/;
+const AMOUNT_HINT = 'Nhập số lượng dạng số, ví dụ 2, 0,5 hoặc 1/2 — hoặc để trống.';
 export const ShoppingListModal = ({
   visible,
   onClose
@@ -12,6 +15,7 @@ export const ShoppingListModal = ({
   const {
     shoppingList,
     toggleShoppingItem,
+    updateShoppingItem,
     deleteShoppingItem,
     restoreShoppingItem,
     clearCheckedShoppingItems,
@@ -20,9 +24,32 @@ export const ShoppingListModal = ({
   // One-tap delete stays fast; the last removed row can be restored for a few seconds
   const [lastRemoved, setLastRemoved] = useState(null);
   const undoTimeoutRef = useRef(null);
+  // Row being edited: { id, name, amount, unit } (text values of the form)
+  const [editing, setEditing] = useState(null);
   useEffect(() => {
-    if (!visible) setLastRemoved(null);
+    if (!visible) {
+      setLastRemoved(null);
+      setEditing(null);
+    }
   }, [visible]);
+  const startEdit = item => setEditing({
+    id: item.id,
+    name: item.name,
+    amount: item.amount === 'Vừa đủ' ? '' : String(item.amount ?? ''),
+    unit: item.unit || ''
+  });
+  const handleSaveEdit = () => {
+    if (!editing.name.trim()) {
+      showAlert('Thiếu tên nguyên liệu', 'Tên nguyên liệu không được để trống.');
+      return;
+    }
+    if (editing.amount.trim() && !AMOUNT_PATTERN.test(editing.amount.trim())) {
+      showAlert('Số lượng chưa hợp lệ', AMOUNT_HINT);
+      return;
+    }
+    updateShoppingItem(editing.id, editing);
+    setEditing(null);
+  };
   useEffect(() => () => clearTimeout(undoTimeoutRef.current), []);
   const handleDeleteItem = id => {
     const removed = deleteShoppingItem(id);
@@ -52,8 +79,8 @@ export const ShoppingListModal = ({
       showAlert('Thiếu tên nguyên liệu', 'Vui lòng nhập tên nguyên liệu cần mua.');
       return;
     }
-    if (newAmount.trim() && !/^\d+([.,]\d+)?(\/\d+)?$/.test(newAmount.trim())) {
-      showAlert('Số lượng chưa hợp lệ', 'Nhập số lượng dạng số, ví dụ 2, 0,5 hoặc 1/2 — hoặc để trống.');
+    if (newAmount.trim() && !AMOUNT_PATTERN.test(newAmount.trim())) {
+      showAlert('Số lượng chưa hợp lệ', AMOUNT_HINT);
       return;
     }
     const { merged } = addCustomShoppingItem(newName, newAmount, newUnit);
@@ -161,7 +188,7 @@ export const ShoppingListModal = ({
                   <Text style={styles.aisleTitle}>{group.label}</Text>
                   <Text style={styles.aisleCount}>{group.remaining}/{group.items.length}</Text>
                 </View>
-                {group.items.map(item => <Pressable key={item.id} accessibilityRole="checkbox" accessibilityState={{ checked: item.checked }} onPress={() => toggleShoppingItem(item.id)} style={[styles.itemCard, item.checked && styles.itemCardChecked]}>
+                {group.items.map(item => <Pressable key={item.id} accessibilityRole="checkbox" accessibilityState={{ checked: item.checked }} onPress={() => toggleShoppingItem(item.id)} onLongPress={() => startEdit(item)} style={[styles.itemCard, item.checked && styles.itemCardChecked]}>
                   <View style={styles.checkbox}>
                     <Text style={styles.checkIcon}>{item.checked ? '✓' : ''}</Text>
                   </View>
@@ -171,9 +198,16 @@ export const ShoppingListModal = ({
                       {item.name}
                     </Text>
                     <Text style={styles.itemSub}>
-                      {item.amount} {item.unit} • {item.recipeTitle}
+                      {item.amount} {item.unit} • {item.recipeTitle}{item.stockedToPantry ? ' • đã cất vào tủ' : ''}
                     </Text>
                   </View>
+
+                  <Pressable accessibilityRole="button" accessibilityLabel={`Sửa ${item.name}`} hitSlop={4} onPress={e => {
+              e.stopPropagation();
+              startEdit(item);
+            }} style={styles.deleteBtn}>
+                    <Text style={styles.editText}>✎</Text>
+                  </Pressable>
 
                   <Pressable accessibilityRole="button" accessibilityLabel={`Xóa ${item.name}`} onPress={e => {
               e.stopPropagation();
@@ -201,9 +235,34 @@ export const ShoppingListModal = ({
         }} />
         </ScrollView>
 
+        {/* Edit sheet for one row */}
+        {editing ? <View style={styles.editOverlay}>
+            <View style={styles.editCard}>
+              <Text style={styles.addFormTitle}>SỬA MÓN CẦN MUA</Text>
+              <TextInput style={styles.input} placeholder="Tên nguyên liệu..." placeholderTextColor={HeronColors.disable} value={editing.name} onChangeText={name => setEditing(prev => ({ ...prev, name }))} maxLength={80} />
+              <View style={styles.addInputRow}>
+                <TextInput style={[styles.input, { flex: 1 }]} placeholder="SL" placeholderTextColor={HeronColors.disable} value={editing.amount} onChangeText={amount => setEditing(prev => ({ ...prev, amount }))} keyboardType="decimal-pad" maxLength={8} />
+                <TextInput style={[styles.input, { flex: 1 }]} placeholder="Đơn vị" placeholderTextColor={HeronColors.disable} value={editing.unit} onChangeText={unit => setEditing(prev => ({ ...prev, unit }))} maxLength={20} />
+              </View>
+              <View style={styles.unitChips}>
+                {UNIT_SUGGESTIONS.map(unit => <Pressable key={unit} onPress={() => setEditing(prev => ({ ...prev, unit }))} style={[styles.unitChip, editing.unit === unit && styles.unitChipActive]}>
+                    <Text style={[styles.unitChipText, editing.unit === unit && styles.unitChipTextActive]}>{unit}</Text>
+                  </Pressable>)}
+              </View>
+              <View style={styles.actionsRow}>
+                <Pressable onPress={() => setEditing(null)} style={[styles.shareBtn, styles.cancelEditBtn]}>
+                  <Text style={[styles.shareBtnText, styles.cancelEditText]}>Hủy</Text>
+                </Pressable>
+                <Pressable onPress={handleSaveEdit} style={[styles.shareBtn, styles.saveEditBtn]}>
+                  <Text style={styles.shareBtnText}>Lưu</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View> : null}
+
         {/* Undo bar for the last deleted row */}
         {lastRemoved ? <View style={styles.undoBar} accessibilityLiveRegion="polite">
-            <Text style={styles.undoText} numberOfLines={1}>Đã xóa "{lastRemoved.item.name}"</Text>
+            <Text style={styles.undoText} numberOfLines={1}>Đã xóa “{lastRemoved.item.name}”</Text>
             <Pressable accessibilityRole="button" onPress={handleUndoDelete} hitSlop={8}>
               <Text style={styles.undoAction}>HOÀN TÁC</Text>
             </Pressable>
@@ -444,6 +503,60 @@ const styles = StyleSheet.create({
     color: '#DC2626',
     fontWeight: '700',
     fontSize: 13
+  },
+  editText: {
+    color: '#64748B',
+    fontSize: 16,
+    fontWeight: '700'
+  },
+  editOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'center',
+    padding: Spacing.lg
+  },
+  editCard: {
+    backgroundColor: HeronColors.card,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: 10,
+    ...HeronShadow.card
+  },
+  unitChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6
+  },
+  unitChip: {
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: HeronColors.border,
+    justifyContent: 'center'
+  },
+  unitChipActive: {
+    backgroundColor: HeronColors.brand,
+    borderColor: HeronColors.brand
+  },
+  unitChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: HeronColors.secondary
+  },
+  unitChipTextActive: {
+    color: '#FFFFFF'
+  },
+  cancelEditBtn: {
+    backgroundColor: HeronColors.cardAlt,
+    borderWidth: 1,
+    borderColor: HeronColors.border
+  },
+  cancelEditText: {
+    color: HeronColors.inkPrimary
+  },
+  saveEditBtn: {
+    backgroundColor: HeronColors.brand
   },
   undoBar: {
     position: 'absolute',
