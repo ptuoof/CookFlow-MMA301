@@ -15,10 +15,14 @@ import { QrScannerModal } from '../components/QrScannerModal';
 import { PantryFinderModal } from '../components/PantryFinderModal';
 import { FloatingTimerWidget } from '../components/ui/FloatingTimerWidget';
 import { DIET_TAGS, TIME_FILTERS, filterRecipes, userAllergensIn } from '../utils/dietary';
+import { useAuth } from '../context/AuthContext';
+import { AuthScreen } from '../components/AuthScreen';
+import { AdminScreen } from '../components/AdminScreen';
 import { hasTimer, hasVideo, totalMinutes } from '../utils/recipeModel';
 import { confirmAction, showAlert } from '../utils/dialog';
 import { CATEGORIES, DIFFICULTIES } from '../types/recipe';
 export default function AppMainScreen() {
+  const auth = useAuth();
   const {
     recipes,
     activeRecipeForCooking,
@@ -168,6 +172,9 @@ export default function AppMainScreen() {
     setTemplateRecipe(recipe);
     setIsCreateModalVisible(true);
   };
+  if (!auth.ready) return <SafeAreaView style={styles.safeArea} />;
+  if (!auth.user) return <AuthScreen />;
+  if (auth.user.role === 'admin') return <AdminScreen />;
   return <SafeAreaView style={styles.safeArea}>
       <View style={styles.page}>
         {/* Heron Architectural Header */}
@@ -179,10 +186,13 @@ export default function AppMainScreen() {
               </View>
               <Text style={styles.brandTag}>COOKFLOW // SYS.AI</Text>
             </View>
-            <Text style={styles.appTitle}>Trợ Lý Nấu Ăn</Text>
+            <Text style={styles.appTitle} numberOfLines={1}>Chào, {auth.user.name?.trim().split(/\s+/).slice(-1)[0] || 'bạn'}!</Text>
           </View>
 
           <View style={styles.headerRightActions}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Đăng xuất" onPress={auth.signOut} style={({ pressed }) => [styles.accountButton, pressed && { opacity: 0.7 }]}>
+              <Text style={styles.accountButtonText}>Thoát</Text>
+            </Pressable>
             {/* Pantry Finder Button */}
             <Pressable accessibilityRole="button" accessibilityLabel="Mở tủ lạnh nhà tôi" hitSlop={4} onPress={() => setIsPantryVisible(true)} style={({
             pressed
@@ -651,6 +661,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8
   },
+  accountButton: {
+    height: 38,
+    paddingHorizontal: 12,
+    borderRadius: Radius.full,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: HeronColors.border
+  },
+  accountButtonText: { color: HeronColors.granite, fontSize: 13, fontWeight: '600' },
   headerActionBtn: {
     width: 40,
     height: 40,

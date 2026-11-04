@@ -3,14 +3,15 @@ import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { Slot } from 'expo-router';
 import { RecipeProvider } from '../context/RecipeContext';
+import { AuthProvider } from '../context/AuthContext';
 SplashScreen.preventAutoHideAsync().catch(() => {});
 export default function RootLayout() {
   useEffect(() => {
     // Hide splash screen after initialization
     SplashScreen.hideAsync().catch(() => {});
   }, []);
-  return <RecipeProvider>
+  return <AuthProvider><RecipeProvider>
       <StatusBar style="dark" />
       <Slot />
-    </RecipeProvider>;
+    </RecipeProvider></AuthProvider>;
 }
