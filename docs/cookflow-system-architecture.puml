@@ -1,0 +1,34 @@
+@startuml CookFlow-System-Architecture
+title CookFlow - System Architecture
+left to right direction
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam linetype ortho
+skinparam shadowing false
+
+actor "Người dùng" as User
+
+rectangle "CookFlow Architecture" {
+  package "CookFlow Frontend" {
+    component "Ứng dụng CookFlow\nReact Native + Expo" as App
+  }
+
+  package "Thiết bị người dùng" {
+    database "Lưu trữ cục bộ\nAsyncStorage / localStorage" as Storage
+  }
+
+  package "Third Party" {
+    cloud "Google Gemini API" as Gemini
+  }
+}
+
+User --> App : thao tác
+App <--> Storage : đọc / ghi dữ liệu
+App <--> Gemini : HTTPS request / response
+
+note bottom of App
+  Công thức, yêu thích, kho nguyên liệu,
+  mua sắm, cài đặt và lịch sử nấu.
+end note
+
+@enduml
