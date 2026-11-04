@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
@@ -34,6 +34,7 @@ export const CookingModeModal = ({
   const [viewMode, setViewMode] = useState('video');
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const lastAutoSpokenStep = useRef(null);
   const [showIngredients, setShowIngredients] = useState(false);
   // Pantry entries the user marks as used up when the dish is done
   const [usedUp, setUsedUp] = useState({});
@@ -71,6 +72,9 @@ export const CookingModeModal = ({
   }, [visible, settings.keepAwake]);
   useEffect(() => {
     if (visible && voiceEnabled && currentStep) {
+      const stepKey = `${recipe.id}:${safeStepIndex}`;
+      if (lastAutoSpokenStep.current === stepKey) return;
+      lastAutoSpokenStep.current = stepKey;
       Speech.stop();
       Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, { language: 'vi-VN' });
     }
@@ -79,8 +83,19 @@ export const CookingModeModal = ({
   }, [visible, voiceEnabled, recipe?.id, safeStepIndex]);
   const speakCurrentStep = () => {
     if (!currentStep) return;
+    lastAutoSpokenStep.current = `${recipe.id}:${safeStepIndex}`;
     Speech.stop();
     Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, { language: 'vi-VN' });
+  };
+  const toggleVoice = () => {
+    if (voiceEnabled) {
+      Speech.stop();
+      setVoiceEnabled(false);
+      return;
+    }
+    setVoiceEnabled(true);
+    // Start on the press handler so browsers requiring a user gesture allow speech.
+    speakCurrentStep();
   };
   if (!recipe || !currentStep) return null;
   const handleNext = () => {
@@ -146,7 +161,7 @@ export const CookingModeModal = ({
               <Text style={styles.exitText}>✕ ĐÓNG</Text>
             </Pressable>
 
-            <Pressable onPress={() => setVoiceEnabled(enabled => !enabled)} style={styles.exitButton}>
+            <Pressable onPress={toggleVoice} style={styles.exitButton}>
               <Text style={styles.exitText}>{voiceEnabled ? '🔊 TẮT ĐỌC' : '🔊 ĐỌC TỰ ĐỘNG'}</Text>
             </Pressable>
 
