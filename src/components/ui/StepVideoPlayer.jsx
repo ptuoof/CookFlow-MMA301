@@ -18,7 +18,7 @@ export const StepVideoPlayer = ({
   const [hasVideoError, setHasVideoError] = useState(false);
 
   // Initialize video player with expo-video
-  const safeSource = videoUrl || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+  const safeSource = videoUrl || 'https://videos.pexels.com/video-files/856621/856621-hd_1920_1080_30fps.mp4';
   const player = useVideoPlayer(safeSource, p => {
     p.loop = true;
     p.muted = false;
