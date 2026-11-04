@@ -13,6 +13,9 @@ import { SERVINGS_MAX as MAX_SERVINGS } from '../constants/limits';
 import { ingredientsOnHand } from '../utils/pantry';
 import { formatCookedDay, formatRating, recipeStats } from '../utils/history';
 import { detectAllergens } from '../utils/dietary';
+import { AiChefLogo } from './ui/AiChefLogo';
+import { RequestRecipeModal } from './RequestRecipeModal';
+import { caloriesFromMacros, hasMacros } from '../utils/nutrition';
 export const RecipeDetailModal = ({
   recipe: recipeProp,
   visible,
@@ -35,6 +38,7 @@ export const RecipeDetailModal = ({
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
   const [aiQuestion, setAiQuestion] = useState(null);
   const [isShareVisible, setIsShareVisible] = useState(false);
+  const [isReportVisible, setIsReportVisible] = useState(false);
   // Read the live copy so edits made while open (e.g. AI substitutions) show immediately
   const recipe = recipeProp ? getRecipeById(recipeProp.id) || recipeProp : null;
   const [currentServings, setCurrentServings] = useState(recipe?.servings ?? 1);
@@ -92,8 +96,8 @@ export const RecipeDetailModal = ({
             <Text style={styles.iconText}>✕</Text>
           </Pressable>
           <View style={styles.topActions}>
-            <Pressable onPress={() => openAiChat()} style={styles.iconCircle}>
-              <Text style={styles.iconText}>🤖</Text>
+            <Pressable accessibilityLabel="Hỏi trợ lý AI" onPress={() => openAiChat()} style={[styles.iconCircle, styles.aiIconCircle]}>
+              <AiChefLogo size={30} />
             </Pressable>
             <Pressable onPress={() => setIsShareVisible(true)} style={styles.iconCircle}>
               <Text style={styles.iconText}>📤</Text>
@@ -156,6 +160,9 @@ export const RecipeDetailModal = ({
               {onDuplicateRecipe ? <Pressable accessibilityRole="button" onPress={() => onDuplicateRecipe(recipe)} style={styles.recipeActionBtn}>
                   <Text style={styles.recipeActionText}>⧉ Tạo bản sao để chỉnh</Text>
                 </Pressable> : null}
+              {!recipe.isCustom ? <Pressable accessibilityRole="button" onPress={() => setIsReportVisible(true)} style={styles.recipeActionBtn}>
+                  <Text style={[styles.recipeActionText, styles.reportText]}>⚑ Báo cáo / góp ý</Text>
+                </Pressable> : null}
             </View>
           </View>
 
@@ -193,10 +200,27 @@ export const RecipeDetailModal = ({
               <Text style={styles.statVal}>{recipe.difficulty}</Text>
             </View>
 
-            {recipe.calories ? <View style={[styles.statCell, styles.statCellBorder]}>
-                <Text style={styles.statKey}>CALORIES</Text>
-                <Text style={styles.statVal}>{recipe.calories} kcal/phần</Text>
+          </View>
+
+          {/* Nutrition per serving: kcal + macros (per person, independent of the servings picker) */}
+          <View style={styles.nutritionCard}>
+            <View style={styles.nutritionHead}>
+              <Text style={styles.statKey}>DINH DƯỠNG / 1 PHẦN</Text>
+              <Text style={styles.nutritionKcal}>{recipe.calories ? `${recipe.calories} kcal` : 'Chưa có kcal'}</Text>
+            </View>
+            {hasMacros(recipe) ? <View style={styles.macroRow}>
+                {[['Đạm', 'protein', '#1971C2'], ['Tinh bột', 'carbs', '#D97706'], ['Chất béo', 'fat', '#FA3600']].map(([label, key, color]) => {
+                  const grams = recipe.nutrition[key];
+                  const kcalFromMacros = caloriesFromMacros(recipe.nutrition) || 1;
+                  const share = grams == null ? 0 : grams * (key === 'fat' ? 9 : 4) / kcalFromMacros;
+                  return <View key={key} style={styles.macroCell}>
+                      <Text style={styles.macroLabel}>{label}</Text>
+                      <Text style={styles.macroVal}>{grams == null ? '—' : `${grams} g`}</Text>
+                      <View style={styles.macroTrack}><View style={[styles.macroFill, { width: `${Math.round(share * 100)}%`, backgroundColor: color }]} /></View>
+                    </View>;
+                })}
               </View> : null}
+            {currentServings !== 1 && recipe.calories ? <Text style={styles.nutritionFoot}>Cả mẻ {currentServings} người ≈ {(recipe.calories * currentServings).toLocaleString('vi-VN')} kcal.</Text> : null}
           </View>
 
           {/* Checklist Nguyên liệu */}
@@ -252,9 +276,7 @@ export const RecipeDetailModal = ({
           {/* AI Sous-Chef quick questions */}
           <View style={styles.aiCard}>
             <View style={styles.aiCardHeader}>
-              <View style={styles.aiAvatar}>
-                <Text style={styles.aiAvatarText}>🤖</Text>
-              </View>
+              <AiChefLogo size={44} />
               <View style={{
               flex: 1
             }}>
@@ -333,10 +355,71 @@ export const RecipeDetailModal = ({
         <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={recipe} servings={currentServings} initialQuestion={aiQuestion} />
 
         <ShareRecipeModal key={recipe.id} visible={isShareVisible} onClose={() => setIsShareVisible(false)} recipe={recipe} />
+
+        <RequestRecipeModal visible={isReportVisible} onClose={() => setIsReportVisible(false)} recipe={recipe} />
       </View>
     </Modal>;
 };
 const styles = StyleSheet.create({
+  aiIconCircle: {
+    backgroundColor: 'transparent',
+    borderWidth: 0
+  },
+  reportText: {
+    color: HeronColors.granite
+  },
+  nutritionCard: {
+    marginTop: -Spacing.md,
+    marginBottom: Spacing.xl,
+    padding: 14,
+    borderRadius: Radius.md,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: HeronColors.border,
+    gap: 12
+  },
+  nutritionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between'
+  },
+  nutritionKcal: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: HeronColors.brand
+  },
+  macroRow: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  macroCell: {
+    flex: 1,
+    gap: 4
+  },
+  macroLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: HeronColors.granite
+  },
+  macroVal: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: HeronColors.primary
+  },
+  macroTrack: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: HeronColors.borderLight,
+    overflow: 'hidden'
+  },
+  macroFill: {
+    height: 5,
+    borderRadius: 3
+  },
+  nutritionFoot: {
+    fontSize: 12,
+    color: HeronColors.granite
+  },
   portionButtonDisabled: {
     opacity: 0.35
   },

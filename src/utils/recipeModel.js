@@ -1,9 +1,10 @@
 // Normalizes recipe objects coming from storage, the create form, QR codes or AI variants,
 // so every screen can rely on the same shape (no undefined arrays, numbered steps, unique ids).
-import { normalizeVi, tokensOf } from './text';
+import { normalizeVi } from './text';
 import { normalizeUnit } from './units';
 import { normalizeTags } from './dietary';
-import { CATEGORIES } from '../types/recipe';
+import { categoryKey, fallbackCategory, getRecipeCategories } from './categories';
+import { normalizeCalories, normalizeMacros } from './nutrition';
 import { MINUTES_MAX, SERVINGS_MAX, SERVINGS_MIN, TIMER_SECONDS_MAX } from '../constants/limits';
 
 let idCounter = 0;
@@ -25,14 +26,14 @@ const num = (value, fallback, min, max) => {
 };
 
 export const DEFAULT_CATEGORY = 'Món chính 🍲';
-const RECIPE_CATEGORIES = CATEGORIES.filter(cat => cat !== 'Tất cả');
-const categoryKey = value => tokensOf(value).join(' ');
 
-// Maps any category text to one of the filter chips ("mon chinh", "Món chính" → "Món chính 🍲").
-// Unknown values (e.g. from a QR code) fall back to the default so the recipe stays filterable.
+// Maps any category text to one of the current categories ("mon chinh" → "Món chính 🍲").
+// Unknown values (e.g. from a QR code, or a category the admin deleted) fall back to the
+// default so the recipe stays filterable.
 export const normalizeCategory = value => {
   const key = categoryKey(value);
-  return RECIPE_CATEGORIES.find(cat => categoryKey(cat) === key) || DEFAULT_CATEGORY;
+  const list = getRecipeCategories();
+  return list.find(cat => categoryKey(cat) === key) || fallbackCategory(list);
 };
 
 export const DEFAULT_RECIPE_IMAGE = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80';
@@ -84,6 +85,9 @@ export const normalizeRecipe = recipe => {
     cookTimeMinutes: num(recipe.cookTimeMinutes, 0, 0, MINUTES_MAX),
     servings: num(recipe.servings, 2, SERVINGS_MIN, SERVINGS_MAX),
     tags: normalizeTags(recipe.tags),
+    // kcal and macros are per serving; unknown values stay null (never shown as 0)
+    calories: normalizeCalories(recipe.calories),
+    nutrition: normalizeMacros(recipe.nutrition),
     ingredients,
     steps
   };
