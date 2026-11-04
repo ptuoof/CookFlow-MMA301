@@ -242,3 +242,111 @@ test('backup round trip and validation', () => {
   assert.throws(() => parseBackup(JSON.stringify({ format: 'other', data: {} })), /không phải/);
   assert.throws(() => parseBackup(JSON.stringify({ format: 'cookflow-backup', version: 99, data: {} })), /mới hơn/);
 });
+
+// ---------- Nutrition, meal plan, requests, categories ----------
+const N = await import(`${R}/utils/nutrition.js`);
+const MP = await import(`${R}/utils/mealPlan.js`);
+const RQ = await import(`${R}/utils/recipeRequests.js`);
+const CAT = await import(`${R}/utils/categories.js`);
+
+
+test('kcal and macros are normalized per serving', () => {
+  const r = normalizeRecipe({ title: 'A', calories: '450,6', nutrition: { protein: '20', carbs: -3, fat: 'x' }, steps: [{ instruction: 'x' }] });
+  assert.equal(r.calories, 451);
+  assert.deepEqual(r.nutrition, { protein: 20, carbs: null, fat: null });
+  assert.equal(normalizeRecipe({ title: 'B', calories: 0 }).calories, null);
+  assert.equal(normalizeRecipe({ title: 'C', calories: 99999 }).calories, N.KCAL_MAX);
+  assert.equal(N.caloriesFromMacros({ protein: 10, carbs: 10, fat: 10 }), 170);
+  for (const recipe of INITIAL_RECIPES) {
+    assert.ok(normalizeRecipe(recipe).calories > 0, recipe.title);
+    assert.ok(N.hasMacros(normalizeRecipe(recipe)), recipe.title);
+  }
+});
+test('kcal estimate from ingredients', () => {
+  const eggs = N.estimateCalories({ servings: 2, ingredients: [{ name: 'Trứng gà', amount: '4', unit: 'quả' }, { name: 'Muối', amount: 'Vừa đủ', unit: '' }] });
+  assert.equal(eggs.perServing, 145); // 4 × 50 g × 143 / 100 / 2 ≈ 143 → 145
+  assert.deepEqual(eggs.unmatched, []);
+  const rice = N.estimateCalories({ servings: 1, ingredients: [{ name: 'Gạo', amount: '0,1', unit: 'kg' }, { name: 'Lá lạ', amount: '1', unit: 'g' }] });
+  assert.equal(rice.perServing, 360);
+  assert.deepEqual(rice.unmatched, ['Lá lạ']);
+  // "cà rốt" is not fish ("cá"), "bơ lạt" is butter not avocado
+  assert.equal(N.findFood('Cà rốt baby').key, 'ca rot');
+  assert.equal(N.findFood('Bơ lạt').kcal, 717);
+  assert.equal(N.estimateCalories({ ingredients: [] }).perServing, null);
+});
+test('meal plan dates and entries', () => {
+  assert.equal(MP.addDays('2026-02-28', 1), '2026-03-01');
+  assert.equal(MP.addDays('2026-01-01', -1), '2025-12-31');
+  const week = MP.weekOf('2026-11-04'); // Wednesday
+  assert.equal(week[0], '2026-11-02');
+  assert.equal(week[6], '2026-11-08');
+  assert.equal(MP.weekdayLabel('2026-11-08'), 'CN');
+  assert.equal(MP.dayTitle('2026-11-05', '2026-11-04'), 'Ngày mai');
+  const recipe = normalizeRecipe(INITIAL_RECIPES[0]);
+  const past = MP.makeMealEntry({ date: '2026-11-01', slot: 'dinner', recipe }, '2026-11-04');
+  const future = MP.makeMealEntry({ date: '2026-11-06', slot: 'xxx', recipe, servings: 8 }, '2026-11-04');
+  assert.equal(past.eaten, true);
+  assert.equal(future.eaten, false);
+  assert.equal(future.slot, 'lunch');
+  assert.equal(MP.makeMealEntry({ date: 'hôm nay', title: 'x' }), null);
+  assert.equal(MP.makeMealEntry({ date: '2026-11-06', title: '   ' }), null);
+  const free = MP.makeMealEntry({ date: '2026-11-04', slot: 'breakfast', title: 'Phở ngoài hàng', calories: 450 }, '2026-11-04');
+  const get = id => (id === recipe.id ? recipe : null);
+  const today = MP.mealsForDay([free], [], '2026-11-04', get);
+  assert.equal(MP.dayCalories(today).planned, 450);
+  // Recipe dishes follow the recipe's kcal; cooked-mode history shows up on its day
+  const finishedAt = new Date(2026, 10, 1, 19, 0).getTime();
+  const day = MP.mealsForDay([past], [{ id: 'h1', recipeId: 'other', recipeTitle: 'Món khác', servings: 2, finishedAt }], '2026-11-01', get);
+  assert.equal(day.length, 2);
+  assert.equal(MP.dayCalories(day).eaten, recipe.calories);
+  // Same dish logged by hand and cooked in the same slot counts once
+  const dup = MP.mealsForDay([past], [{ id: 'h2', recipeId: recipe.id, recipeTitle: recipe.title, servings: 2, finishedAt }], '2026-11-01', get);
+  assert.equal(dup.length, 1);
+  const items = MP.plannedIngredients([future, past], '2026-11-02', '2026-11-08', get, scaleAmount);
+  assert.equal(items.length, recipe.ingredients.length); // only the planned (not eaten) dish
+  assert.equal(items[0].amount, scaleAmount(recipe.ingredients[0].amount, 8 / recipe.servings));
+  const clean = MP.sanitizeMealPlan([future, past, { date: 'bad', title: 'x' }, null]);
+  assert.deepEqual(clean.map(e => e.date), ['2026-11-01', '2026-11-06']);
+});
+test('recipe requests validation', () => {
+  const user = { email: 'a@b.vn', name: 'An' };
+  const recipe = { id: 'rec_01', title: 'Trứng' };
+  assert.ok(RQ.buildRequest({ type: 'wrong_info', details: 'Định lượng muối quá nhiều', user }).errors.includes('Chọn công thức cần báo cáo.'));
+  assert.ok(RQ.buildRequest({ type: 'new_recipe', title: 'Bún bò', details: 'ngắn', user }).errors.length);
+  const ok = RQ.buildRequest({ type: 'new_recipe', title: 'Bún bò Huế', details: 'Mình muốn có công thức bún bò Huế chuẩn vị.', user });
+  assert.equal(ok.request.status, 'pending');
+  const again = RQ.buildRequest({ type: 'new_recipe', title: 'bún bò huế', details: 'Gửi lại lần nữa cho chắc nhé.', user }, [ok.request]);
+  assert.ok(again.errors[0].includes('đã gửi'));
+  const report = RQ.buildRequest({ type: 'wrong_info', recipe, details: 'Kcal của món bị sai nhiều.', user }, [ok.request]);
+  assert.equal(report.request.recipeId, 'rec_01');
+  const done = RQ.applyRequestUpdate(report.request, { status: 'resolved', adminReply: ' Đã sửa ' });
+  assert.equal(done.status, 'resolved');
+  assert.equal(done.adminReply, 'Đã sửa');
+  assert.equal(RQ.applyRequestUpdate(done, { status: 'lạ' }).status, 'resolved');
+  assert.equal(RQ.countByStatus([ok.request, done]).pending, 1);
+  assert.equal(RQ.buildRequest({ type: 'improve', recipe, details: 'Thêm video từng bước nhé', user: null }).errors[0], 'Bạn cần đăng nhập để gửi yêu cầu.');
+});
+test('admin categories drive recipe normalization', () => {
+  try {
+    assert.equal(CAT.validateCategoryName('  ', CAT.DEFAULT_CATEGORIES), 'Tên danh mục không được để trống.');
+    assert.equal(CAT.validateCategoryName('mon chinh', CAT.DEFAULT_CATEGORIES), 'Danh mục này đã tồn tại.');
+    assert.equal(CAT.validateCategoryName('Món chính 🍲', CAT.DEFAULT_CATEGORIES, 'Món chính 🍲'), null);
+    assert.ok(CAT.validateCategoryName('tat ca', []));
+    CAT.setRecipeCategories([...CAT.DEFAULT_CATEGORIES, 'Đồ nướng 🔥']);
+    assert.equal(normalizeCategory('do nuong'), 'Đồ nướng 🔥');
+    CAT.setRecipeCategories(['Ăn sáng', 'Ăn tối']);
+    assert.equal(normalizeCategory('Món chính 🍲'), 'Ăn sáng'); // deleted category → first remaining
+    assert.deepEqual(CAT.sanitizeCategories(['', 'Tất cả', 'A', 'a']), ['A']);
+    assert.deepEqual(CAT.sanitizeCategories([]), CAT.DEFAULT_CATEGORIES);
+  } finally {
+    CAT.setRecipeCategories(CAT.DEFAULT_CATEGORIES);
+  }
+});
+test('backup carries the meal plan and kcal goal', () => {
+  const entry = MP.makeMealEntry({ date: '2026-11-04', slot: 'lunch', title: 'Cơm gà', calories: 600 });
+  const file = JSON.stringify(buildBackup({ recipes: [], mealPlan: [entry], settings: { calorieGoal: 1800 } }));
+  const { data, summary } = parseBackup(file);
+  assert.equal(data.mealPlan[0].title, 'Cơm gà');
+  assert.equal(data.settings.calorieGoal, 1800);
+  assert.equal(summary.meals, 1);
+});
