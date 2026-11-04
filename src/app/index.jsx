@@ -7,7 +7,10 @@ import { AppleBadge } from '../components/ui/AppleBadge';
 import { RecipeDetailModal } from '../components/RecipeDetailModal';
 import { CookingModeModal } from '../components/CookingModeModal';
 import { CreateRecipeModal } from '../components/CreateRecipeModal';
-import { MyRecipesView } from '../components/MyRecipesView';
+import { MealPlanScreen } from '../components/MealPlanScreen';
+import { ProfileScreen } from '../components/ProfileScreen';
+import { AiChefChatModal } from '../components/AiChefChatModal';
+import { AiChefLogo } from '../components/ui/AiChefLogo';
 import { SettingsModal } from '../components/SettingsModal';
 import { OnboardingModal } from '../components/OnboardingModal';
 import { ShoppingListModal } from '../components/ShoppingListModal';
@@ -20,7 +23,8 @@ import { AuthScreen } from '../components/AuthScreen';
 import { AdminScreen } from '../components/AdminScreen';
 import { hasTimer, hasVideo, totalMinutes } from '../utils/recipeModel';
 import { confirmAction, showAlert } from '../utils/dialog';
-import { CATEGORIES, DIFFICULTIES } from '../types/recipe';
+import { DIFFICULTIES } from '../types/recipe';
+import { ALL_CATEGORY } from '../utils/categories';
 export default function AppMainScreen() {
   const auth = useAuth();
   const {
@@ -42,16 +46,23 @@ export default function AppMainScreen() {
     isHydrated,
     shoppingList,
     getRecipeById,
-    settings
+    settings,
+    categories,
+    pantryIngredients,
+    timers
   } = useRecipes();
+  const CATEGORIES = useMemo(() => [ALL_CATEGORY, ...categories], [categories]);
   // Extra explore filters (screen-local): max total minutes, difficulty, diet tag
   const [maxMinutes, setMaxMinutes] = useState(null);
   const [difficultyFilter, setDifficultyFilter] = useState(null);
   const [tagFilter, setTagFilter] = useState(null);
   const [showAllergenRecipes, setShowAllergenRecipes] = useState(false);
   const allergies = useMemo(() => settings.allergies || [], [settings.allergies]);
-  // Navigation tab state: 'explore' | 'myRecipes'
+  // Bottom menu: 'explore' | 'plan' | 'profile' (fridge and shopping list open as sheets)
   const [currentTab, setCurrentTab] = useState('explore');
+  // Sub-page of the profile tab: 'home' | 'myRecipes' | 'requests'
+  const [profileView, setProfileView] = useState('home');
+  const [isAiChatVisible, setIsAiChatVisible] = useState(false);
 
   // Modals state
   const [selectedRecipeForDetail, setSelectedRecipeForDetail] = useState(null);
@@ -172,14 +183,23 @@ export default function AppMainScreen() {
     setTemplateRecipe(recipe);
     setIsCreateModalVisible(true);
   };
+  const renderDockItem = ({ key, icon, label, active, badge, badgeMuted, onPress }) => <Pressable key={key} accessibilityRole="tab" accessibilityState={{ selected: active }} accessibilityLabel={badge ? `${label}, ${badge}` : label} onPress={onPress} style={({ pressed }) => [styles.tabItem, active && styles.tabItemActive, pressed && { opacity: 0.7 }]}>
+      <View>
+        <Text style={[styles.tabIcon, active && styles.tabIconActive]}>{icon}</Text>
+        {badge ? <View style={[styles.badgeCounter, badgeMuted && styles.badgeMuted]}>
+            <Text style={styles.badgeCounterText}>{badge > 99 ? '99+' : badge}</Text>
+          </View> : null}
+      </View>
+      <Text style={[styles.tabLabel, active && styles.tabLabelActive]} numberOfLines={1}>{label}</Text>
+    </Pressable>;
   if (!auth.ready) return <SafeAreaView style={styles.safeArea} />;
   if (!auth.user) return <AuthScreen />;
   if (auth.user.role === 'admin') return <AdminScreen />;
   return <SafeAreaView style={styles.safeArea}>
       <View style={styles.page}>
-        {/* Heron Architectural Header */}
-        <View style={styles.header}>
-          <View>
+        {/* Header (explore only; the other tabs have their own titles) */}
+        {currentTab === 'explore' ? <View style={styles.header}>
+          <View style={{ flex: 1 }}>
             <View style={styles.brandRow}>
               <View style={styles.brandLogoBox}>
                 <View style={styles.brandInnerDot} />
@@ -188,52 +208,10 @@ export default function AppMainScreen() {
             </View>
             <Text style={styles.appTitle} numberOfLines={1}>Chào, {auth.user.name?.trim().split(/\s+/).slice(-1)[0] || 'bạn'}!</Text>
           </View>
-
-          <View style={styles.headerRightActions}>
-            <Pressable accessibilityRole="button" accessibilityLabel="Đăng xuất" onPress={auth.signOut} style={({ pressed }) => [styles.accountButton, pressed && { opacity: 0.7 }]}>
-              <Text style={styles.accountButtonText}>Thoát</Text>
-            </Pressable>
-            {/* Pantry Finder Button */}
-            <Pressable accessibilityRole="button" accessibilityLabel="Mở tủ lạnh nhà tôi" hitSlop={4} onPress={() => setIsPantryVisible(true)} style={({
-            pressed
-          }) => [styles.headerActionBtn, {
-            transform: [{
-              scale: pressed ? 0.94 : 1
-            }]
-          }]}>
-              <View style={styles.fridgeIcon}>
-                <View style={styles.fridgeDivider} />
-                <View style={styles.fridgeHandleTop} />
-                <View style={styles.fridgeHandleBottom} />
-              </View>
-            </Pressable>
-
-            {/* Shopping List Button */}
-            <Pressable accessibilityRole="button" accessibilityLabel={`Danh sách đi chợ, còn ${pendingShoppingCount} món cần mua`} onPress={() => setIsShoppingListVisible(true)} style={({
-            pressed
-          }) => [styles.headerActionBtn, {
-            transform: [{
-              scale: pressed ? 0.94 : 1
-            }]
-          }]}>
-              <Text style={styles.headerActionIcon}>🛒</Text>
-              {pendingShoppingCount > 0 ? <View style={styles.badgeCounter}>
-                  <Text style={styles.badgeCounterText}>{pendingShoppingCount > 99 ? '99+' : pendingShoppingCount}</Text>
-                </View> : null}
-            </Pressable>
-
-            {/* Settings Button */}
-            <Pressable accessibilityRole="button" accessibilityLabel="Cài đặt" onPress={() => setIsSettingsModalVisible(true)} style={({
-            pressed
-          }) => [styles.headerActionBtn, {
-            transform: [{
-              scale: pressed ? 0.94 : 1
-            }]
-          }]}>
-              <Text style={styles.headerActionIcon}>⚙</Text>
-            </Pressable>
-          </View>
-        </View>
+          <Pressable accessibilityRole="button" accessibilityLabel="Mở hồ sơ" onPress={() => { setProfileView('home'); setCurrentTab('profile'); }} style={({ pressed }) => [styles.avatarButton, pressed && { opacity: 0.8 }]}>
+            <Text style={styles.avatarInitial}>{(auth.user.name || '?').trim().split(/\s+/).slice(-1)[0][0]?.toUpperCase()}</Text>
+          </Pressable>
+        </View> : null}
 
         {currentTab === 'explore' ? <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
             {/* A dish in progress survives closing Cooking Mode and restarting the app */}
@@ -339,6 +317,9 @@ export default function AppMainScreen() {
                       <View style={styles.heroMetaPill}>
                         <Text style={styles.heroMetaText}>🎯 {featuredRecipe.difficulty.toUpperCase()}</Text>
                       </View>
+                      {featuredRecipe.calories ? <View style={styles.heroMetaPill}>
+                          <Text style={styles.heroMetaText}>🔥 {featuredRecipe.calories} KCAL</Text>
+                        </View> : null}
                       {hasVideo(featuredRecipe) || hasTimer(featuredRecipe) ? <View style={[styles.heroMetaPill, {
                   backgroundColor: HeronColors.brand
                 }]}>
@@ -421,20 +402,12 @@ export default function AppMainScreen() {
                             ⚠ Có thể chứa: {itemAllergens.map(a => a.label).join(', ')}
                           </Text> : null}
 
-                        <View style={styles.cardSpecFooter}>
-                          <Text style={styles.cardSpecText}>ĐỘ KHÓ: {item.difficulty.toUpperCase()}</Text>
-                          <Text style={styles.cardSpecText}>•</Text>
-                          <Text style={styles.cardSpecText}>{item.steps.length} BƯỚC NẤU</Text>
-                          {hasTimer(item) ? <>
-                              <Text style={styles.cardSpecText}>•</Text>
-                              <Text style={[styles.cardSpecText, {
-                      color: HeronColors.brand,
-                      fontWeight: '800'
-                    }]}>
-                                ⏱ ĐẾM GIỜ
-                              </Text>
-                            </> : null}
-                        </View>
+                        {/* One line: kcal • difficulty • steps • timer (never wraps on narrow phones) */}
+                        <Text style={styles.cardSpecLine} numberOfLines={1}>
+                          {item.calories ? <Text style={styles.cardKcal}>🔥 {item.calories} KCAL  •  </Text> : null}
+                          {item.difficulty.toUpperCase()}  •  {item.steps.length} BƯỚC
+                          {hasTimer(item) ? <Text style={styles.cardTimerFlag}>  •  ⏱ HẸN GIỜ</Text> : null}
+                        </Text>
                       </View>
                     </Pressable>;
           })}
@@ -443,20 +416,28 @@ export default function AppMainScreen() {
             <View style={{
           height: 170
         }} />
-          </ScrollView> : <MyRecipesView onSelectRecipe={rec => setSelectedRecipeForDetail(rec)} onEditRecipe={rec => handleEditRecipe(rec)} />}
+          </ScrollView> : currentTab === 'plan' ? <MealPlanScreen onSelectRecipe={rec => setSelectedRecipeForDetail(rec)} /> : <ProfileScreen
+            view={profileView}
+            onChangeView={setProfileView}
+            onSelectRecipe={rec => setSelectedRecipeForDetail(rec)}
+            onEditRecipe={rec => handleEditRecipe(rec)}
+            onOpenSettings={() => setIsSettingsModalVisible(true)}
+            onOpenQr={() => setIsQrScannerVisible(true)}
+          />}
 
-        {/* Floating Heron Dock Bar */}
+        {/* AI Sous-Chef chat bubble (general questions, meal ideas) */}
+        {currentTab !== 'profile' ? <Pressable accessibilityRole="button" accessibilityLabel="Mở trợ lý AI" onPress={() => setIsAiChatVisible(true)} style={({ pressed }) => [styles.aiFab, { bottom: timers.length && !isCookingVisible ? 170 : 104, transform: [{ scale: pressed ? 0.92 : 1 }] }]}>
+            <AiChefLogo size={52} />
+          </Pressable> : null}
+
+        {/* Bottom menu: tabs + fridge / shopping sheets + create */}
         <View style={styles.tabBarContainer}>
           <View style={styles.tabBar}>
-            {/* Tab 1: Khám phá */}
-            <Pressable onPress={() => setCurrentTab('explore')} style={[styles.tabItem, currentTab === 'explore' && styles.tabItemActive]}>
-              <Text style={[styles.tabLabel, currentTab === 'explore' && styles.tabLabelActive]}>
-                KHÁM PHÁ
-              </Text>
-            </Pressable>
+            {renderDockItem({ key: 'explore', icon: '⌂', label: 'Khám phá', active: currentTab === 'explore', onPress: () => setCurrentTab('explore') })}
+            {renderDockItem({ key: 'plan', icon: '🗓', label: 'Lịch ăn', active: currentTab === 'plan', onPress: () => setCurrentTab('plan') })}
+            {renderDockItem({ key: 'fridge', icon: '🧊', label: 'Tủ lạnh', active: isPantryVisible, badge: pantryIngredients.length || null, badgeMuted: true, onPress: () => setIsPantryVisible(true) })}
 
-            {/* Tab 2: Nút Tạo món ở giữa (Heron Flame Accent) */}
-            <Pressable onPress={() => {
+            <Pressable accessibilityRole="button" accessibilityLabel="Tạo công thức mới" onPress={() => {
             setEditingRecipe(null);
             setTemplateRecipe(null);
             setIsCreateModalVisible(true);
@@ -470,12 +451,8 @@ export default function AppMainScreen() {
               <Text style={styles.tabCenterIcon}>+</Text>
             </Pressable>
 
-            {/* Tab 3: Món của tôi */}
-            <Pressable onPress={() => setCurrentTab('myRecipes')} style={[styles.tabItem, currentTab === 'myRecipes' && styles.tabItemActive]}>
-              <Text style={[styles.tabLabel, currentTab === 'myRecipes' && styles.tabLabelActive]}>
-                CỦA TÔI
-              </Text>
-            </Pressable>
+            {renderDockItem({ key: 'shopping', icon: '🛒', label: 'Đi chợ', active: isShoppingListVisible, badge: pendingShoppingCount || null, onPress: () => setIsShoppingListVisible(true) })}
+            {renderDockItem({ key: 'profile', icon: '👤', label: 'Hồ sơ', active: currentTab === 'profile', onPress: () => { if (currentTab === 'profile') setProfileView('home'); setCurrentTab('profile'); } })}
           </View>
         </View>
 
@@ -507,7 +484,11 @@ export default function AppMainScreen() {
 
         <ShoppingListModal visible={isShoppingListVisible} onClose={() => setIsShoppingListVisible(false)} />
 
-        <QrScannerModal visible={isQrScannerVisible} onClose={() => setIsQrScannerVisible(false)} onImported={() => setCurrentTab('myRecipes')} />
+        <QrScannerModal visible={isQrScannerVisible} onClose={() => setIsQrScannerVisible(false)} onImported={() => {
+          setProfileView('myRecipes');
+          setCurrentTab('profile');
+        }} />
+        <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={null} />
         <PantryFinderModal
           visible={isPantryVisible}
           onClose={() => setIsPantryVisible(false)}
@@ -738,14 +719,12 @@ const styles = StyleSheet.create({
     fontWeight: '900'
   },
   avatarButton: {
-    width: 38,
-    height: 38,
-    borderRadius: Radius.full,
-    backgroundColor: '#FFFFFF',
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: HeronColors.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: HeronColors.border,
     ...HeronShadow.subtle
   },
   avatarIcon: {
@@ -904,7 +883,8 @@ const styles = StyleSheet.create({
   },
   heroMetaRow: {
     flexDirection: 'row',
-    gap: 8,
+    flexWrap: 'wrap',
+    gap: 6,
     marginTop: 6
   },
   heroMetaPill: {
@@ -1028,6 +1008,18 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     color: HeronColors.granite
   },
+  cardSpecLine: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: HeronColors.surface,
+    letterSpacing: 0.4
+  },
+  cardKcal: {
+    color: HeronColors.brand
+  },
+  cardTimerFlag: {
+    color: HeronColors.brand
+  },
   cardSpecFooter: {
     flexDirection: 'row',
     gap: 6,
@@ -1062,45 +1054,76 @@ const styles = StyleSheet.create({
   },
   tabBarContainer: {
     position: 'absolute',
-    bottom: 24,
-    left: 20,
-    right: 20,
+    bottom: 20,
+    left: 12,
+    right: 12,
     alignItems: 'center'
   },
   tabBar: {
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
-    borderRadius: Radius.full,
+    borderRadius: Radius.xl,
     paddingVertical: 6,
-    paddingHorizontal: 12,
+    paddingHorizontal: 6,
     alignItems: 'center',
     justifyContent: 'space-between',
     width: '100%',
-    maxWidth: 360,
+    maxWidth: 440,
     borderWidth: 1,
     borderColor: HeronColors.border,
     ...HeronShadow.dock
   },
   tabItem: {
-    paddingVertical: 9,
-    paddingHorizontal: 18,
-    borderRadius: Radius.full
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 6,
+    borderRadius: Radius.md,
+    gap: 2
   },
   tabItemActive: {
-    backgroundColor: HeronColors.cardAlt
+    backgroundColor: HeronColors.brandLight
   },
-  tabLabel: {
-    fontSize: 11,
-    fontWeight: '900',
+  tabIcon: {
+    fontSize: 18,
+    textAlign: 'center',
     color: HeronColors.surface,
-    letterSpacing: 0.5
+    opacity: 0.75
   },
-  tabLabelActive: {
+  tabIconActive: {
+    opacity: 1,
     color: HeronColors.primary
   },
+  tabLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: HeronColors.surface,
+    letterSpacing: 0.1
+  },
+  tabLabelActive: {
+    color: HeronColors.brandHover
+  },
+  badgeMuted: {
+    backgroundColor: HeronColors.primary
+  },
+  aiFab: {
+    position: 'absolute',
+    right: 14,
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...HeronShadow.brandGlow
+  },
+  avatarInitial: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#FFFFFF'
+  },
   tabCenterBtn: {
-    width: 44,
-    height: 44,
+    width: 46,
+    height: 46,
+    marginHorizontal: 4,
     borderRadius: Radius.full,
     backgroundColor: HeronColors.brand,
     alignItems: 'center',

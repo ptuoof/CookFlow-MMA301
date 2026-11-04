@@ -12,6 +12,12 @@ import { cancelTimerNotification, initTimerNotifications, scheduleTimerNotificat
 import { buildBackup } from '../utils/backup';
 import { showAlert } from '../utils/dialog';
 import { SERVINGS_MAX, SERVINGS_MIN } from '../constants/limits';
+import { ALL_CATEGORY, DEFAULT_CATEGORIES, fallbackCategory, sanitizeCategories, setRecipeCategories, validateCategoryName } from '../utils/categories';
+import { makeMealEntry, plannedIngredients, sanitizeMealPlan, MEAL_PLAN_LIMIT } from '../utils/mealPlan';
+import { applyRequestUpdate, buildRequest, sanitizeRequests, REQUEST_LIMIT } from '../utils/recipeRequests';
+import { CALORIE_GOAL_MAX, CALORIE_GOAL_MIN, DEFAULT_CALORIE_GOAL } from '../utils/nutrition';
+import { scaleAmount } from '../utils/quantity';
+import { useAuth } from './AuthContext';
 
 const STORAGE_KEY_RECIPES = '@cookflow_recipes_v2';
 const STORAGE_KEY_FAVS = '@cookflow_favs_v2';
@@ -23,14 +29,21 @@ const STORAGE_KEY_LEGACY_TIMER = '@cookflow_timer_v1'; // single timer of older 
 const STORAGE_KEY_TIMERS = '@cookflow_timers_v2';
 const STORAGE_KEY_SESSION = '@cookflow_cooking_session_v1';
 const STORAGE_KEY_HISTORY = '@cookflow_history_v1';
+const STORAGE_KEY_CATEGORIES = '@cookflow_categories_v1';
+const STORAGE_KEY_MEAL_PLAN = '@cookflow_meal_plan_v1';
+const STORAGE_KEY_REQUESTS = '@cookflow_recipe_requests_v1';
+// Built-in recipes the admin deleted: they must not come back as "new samples" on the next launch
+const STORAGE_KEY_DELETED_BUILTINS = '@cookflow_deleted_builtins_v1';
 const RecipeContext = createContext(undefined);
 
 // assumeStaples: basic seasonings count as "on hand"; autoStockPantry: bought items go to the pantry;
 // timerNotifications: system notification when a timer ends in background; allergies: allergen ids
 export const DEFAULT_SETTINGS = {
   keepAwake: true, timerSound: true, vibration: true, timerNotifications: true,
-  assumeStaples: true, autoStockPantry: true, allergies: [], hideAllergenRecipes: true
+  assumeStaples: true, autoStockPantry: true, allergies: [], hideAllergenRecipes: true,
+  calorieGoal: DEFAULT_CALORIE_GOAL // kcal per day, shown on the meal plan
 };
+const clampGoal = value => Math.min(CALORIE_GOAL_MAX, Math.max(CALORIE_GOAL_MIN, Math.round(Number(value)) || DEFAULT_CALORIE_GOAL));
 
 // Safe storage helper
 export const safeStorage = {
@@ -109,7 +122,6 @@ const usePersist = (isHydrated, key, value) => {
 export const RecipeProvider = ({
   children
 }) => {
-  const [isHydrated, setIsHydrated] = useState(false);
   const [cookingTimers, setCookingTimers] = useState([]);
   const [now, setNow] = useState(Date.now());
   const [recipes, setRecipes] = useState(() => INITIAL_RECIPES.map(normalizeRecipe));
@@ -122,6 +134,10 @@ export const RecipeProvider = ({
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
   const [cookHistory, setCookHistory] = useState([]);
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [mealPlan, setMealPlan] = useState([]);
+  const [recipeRequests, setRecipeRequests] = useState([]);
+  const [deletedBuiltInIds, setDeletedBuiltInIds] = useState([]);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   // Latest list for synchronous merges (two adds in the same tick must not drop items)
@@ -130,66 +146,122 @@ export const RecipeProvider = ({
   const pantryRef = useRef(pantryIngredients);
   pantryRef.current = pantryIngredients;
 
-  // ---------- Load persisted data once ----------
+  // ---------- Who is signed in: personal data is stored per account ----------
+  const { user } = useAuth();
+  const userEmail = user?.email || null;
+  const isAdmin = user?.role === 'admin';
+  const recipesRef = useRef(recipes);
+  recipesRef.current = recipes;
+  // Shared catalog (recipes, categories, requests) loads once; personal data loads per account
+  const [sharedReady, setSharedReady] = useState(false);
+  const [loadedFor, setLoadedFor] = useState(null);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [rawRecipes, rawFavs, rawShopping, rawPantry, rawOnboarding, rawSettings, rawTimers, rawSession, rawHistory, rawLegacyTimer] = await Promise.all([
-        STORAGE_KEY_RECIPES, STORAGE_KEY_FAVS, STORAGE_KEY_SHOPPING, STORAGE_KEY_PANTRY,
-        STORAGE_KEY_ONBOARDING, STORAGE_KEY_SETTINGS, STORAGE_KEY_TIMERS, STORAGE_KEY_SESSION,
-        STORAGE_KEY_HISTORY, STORAGE_KEY_LEGACY_TIMER
+      const [rawRecipes, rawCategories, rawRequests, rawDeletedBuiltIns] = await Promise.all([
+        STORAGE_KEY_RECIPES, STORAGE_KEY_CATEGORIES, STORAGE_KEY_REQUESTS, STORAGE_KEY_DELETED_BUILTINS
       ].map(key => safeStorage.getItem(key)));
       if (cancelled) return;
-      setCookHistory(sanitizeHistory(parseJson(rawHistory)));
-
-      let loadedRecipes = INITIAL_RECIPES.map(normalizeRecipe);
+      setRecipeRequests(sanitizeRequests(parseJson(rawRequests)));
+      // Categories first: recipes are normalized onto the admin's category list
+      const storedCategories = parseJson(rawCategories);
+      if (Array.isArray(storedCategories)) setCategories(setRecipeCategories(storedCategories));
+      const deletedIds = (parseJson(rawDeletedBuiltIns) || []).filter(id => typeof id === 'string');
+      setDeletedBuiltInIds(deletedIds);
+      const deletedSet = new Set(deletedIds);
+      let loadedRecipes = INITIAL_RECIPES.filter(r => !deletedSet.has(r.id)).map(normalizeRecipe);
       const storedRecipes = parseJson(rawRecipes);
       if (Array.isArray(storedRecipes)) {
         const normalized = storedRecipes.map(normalizeRecipe).filter(Boolean);
         // Built-in recipes added in a newer app version are appended for existing users
         const knownIds = new Set(normalized.map(r => r.id));
-        const newSamples = INITIAL_RECIPES.filter(r => !knownIds.has(r.id)).map(normalizeRecipe);
+        const newSamples = INITIAL_RECIPES.filter(r => !knownIds.has(r.id) && !deletedSet.has(r.id)).map(normalizeRecipe);
         loadedRecipes = [...normalized, ...newSamples];
-        setRecipes(loadedRecipes);
       }
-      const storedSession = parseJson(rawSession);
-      if (storedSession?.recipeId && loadedRecipes.some(r => r.id === storedSession.recipeId)) {
-        setCookingSession({ ...storedSession, servings: clampServings(storedSession.servings) });
-      }
-      const storedFavs = parseJson(rawFavs);
-      if (Array.isArray(storedFavs)) setFavoriteIds(storedFavs.filter(id => typeof id === 'string'));
-      const storedShopping = parseJson(rawShopping);
-      if (Array.isArray(storedShopping)) {
-        setShoppingList(storedShopping.filter(item => item && typeof item.name === 'string')
-          .map(item => ({ ...item, id: item.id || makeId('shop'), unit: normalizeUnit(item.unit) })));
-      }
-      const storedPantry = parseJson(rawPantry);
-      if (Array.isArray(storedPantry)) setPantryIngredients(storedPantry.filter(item => typeof item === 'string'));
-      const storedSettings = parseJson(rawSettings);
-      if (storedSettings && typeof storedSettings === 'object') {
-        setSettings({ ...DEFAULT_SETTINGS, ...storedSettings, allergies: Array.isArray(storedSettings.allergies) ? storedSettings.allergies : [] });
-      }
-      // Timers of deleted recipes are dropped; a timer that ran out while closed comes back finished
-      const knownRecipeIds = new Set(loadedRecipes.map(r => r.id));
-      setCookingTimers(restoreTimers(parseJson(rawTimers), parseJson(rawLegacyTimer)).filter(timer => knownRecipeIds.has(timer.recipeId)));
-      if (rawLegacyTimer) safeStorage.removeItem(STORAGE_KEY_LEGACY_TIMER);
-      setHasSeenOnboarding(rawOnboarding === 'true');
-      setIsHydrated(true);
+      recipesRef.current = loadedRecipes;
+      setRecipes(loadedRecipes);
+      setSharedReady(true);
     })();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // ---------- Persist after hydration (never overwrite stored data with defaults) ----------
-  usePersist(isHydrated, STORAGE_KEY_RECIPES, recipes);
-  usePersist(isHydrated, STORAGE_KEY_FAVS, favoriteIds);
-  usePersist(isHydrated, STORAGE_KEY_SHOPPING, shoppingList);
-  usePersist(isHydrated, STORAGE_KEY_PANTRY, pantryIngredients);
-  usePersist(isHydrated, STORAGE_KEY_SETTINGS, settings);
-  usePersist(isHydrated, STORAGE_KEY_TIMERS, cookingTimers);
-  usePersist(isHydrated, STORAGE_KEY_SESSION, cookingSession);
-  usePersist(isHydrated, STORAGE_KEY_HISTORY, cookHistory);
+  useEffect(() => {
+    if (!sharedReady || !userEmail) return undefined;
+    let cancelled = false;
+    (async () => {
+      const scoped = key => `${key}::${userEmail}`;
+      const personalKeys = [STORAGE_KEY_FAVS, STORAGE_KEY_SHOPPING, STORAGE_KEY_PANTRY, STORAGE_KEY_ONBOARDING, STORAGE_KEY_SETTINGS,
+        STORAGE_KEY_TIMERS, STORAGE_KEY_SESSION, STORAGE_KEY_HISTORY, STORAGE_KEY_MEAL_PLAN];
+      const raws = await Promise.all(personalKeys.map(key => safeStorage.getItem(scoped(key))));
+      // Data saved before accounts were separated belongs to the first account that signs in
+      const claimLegacy = raws.every(raw => raw == null);
+      const legacy = claimLegacy ? await Promise.all([...personalKeys, STORAGE_KEY_LEGACY_TIMER].map(key => safeStorage.getItem(key))) : [];
+      if (cancelled) return;
+      const pick = index => raws[index] ?? legacy[index] ?? null;
+      const [rawFavs, rawShopping, rawPantry, rawOnboarding, rawSettings, rawTimers, rawSession, rawHistory, rawMealPlan] = personalKeys.map((_, i) => pick(i));
+      const rawLegacyTimer = legacy[personalKeys.length] ?? null;
+      const loadedRecipes = recipesRef.current;
+
+      setCookHistory(sanitizeHistory(parseJson(rawHistory)));
+      setMealPlan(sanitizeMealPlan(parseJson(rawMealPlan)));
+      const storedSession = parseJson(rawSession);
+      setCookingSession(storedSession?.recipeId && loadedRecipes.some(r => r.id === storedSession.recipeId)
+        ? { ...storedSession, servings: clampServings(storedSession.servings) }
+        : null);
+      const storedFavs = parseJson(rawFavs);
+      setFavoriteIds(Array.isArray(storedFavs) ? storedFavs.filter(id => typeof id === 'string') : ['rec_01', 'rec_03']);
+      const storedShopping = parseJson(rawShopping);
+      const shopping = Array.isArray(storedShopping)
+        ? storedShopping.filter(item => item && typeof item.name === 'string').map(item => ({ ...item, id: item.id || makeId('shop'), unit: normalizeUnit(item.unit) }))
+        : DEFAULT_SHOPPING;
+      shoppingRef.current = shopping;
+      setShoppingList(shopping);
+      const storedPantry = parseJson(rawPantry);
+      const pantry = Array.isArray(storedPantry) ? storedPantry.filter(item => typeof item === 'string') : [];
+      pantryRef.current = pantry;
+      setPantryIngredients(pantry);
+      const storedSettings = parseJson(rawSettings);
+      setSettings(storedSettings && typeof storedSettings === 'object' ? {
+        ...DEFAULT_SETTINGS, ...storedSettings,
+        allergies: Array.isArray(storedSettings.allergies) ? storedSettings.allergies : [],
+        calorieGoal: clampGoal(storedSettings.calorieGoal)
+      } : DEFAULT_SETTINGS);
+      // Timers of deleted recipes are dropped; a timer that ran out while closed comes back finished
+      const knownRecipeIds = new Set(loadedRecipes.map(r => r.id));
+      setCookingTimers(restoreTimers(parseJson(rawTimers), parseJson(rawLegacyTimer)).filter(timer => knownRecipeIds.has(timer.recipeId)));
+      setHasSeenOnboarding(rawOnboarding === 'true');
+      if (claimLegacy) [...personalKeys, STORAGE_KEY_LEGACY_TIMER].forEach(key => safeStorage.removeItem(key));
+      setLoadedFor(userEmail);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sharedReady, userEmail]);
+
+  // True once the signed-in account's own data is on screen (never while switching accounts)
+  const isHydrated = sharedReady && !!userEmail && loadedFor === userEmail;
+  const personalKey = key => `${key}::${userEmail}`;
+
+  // ---------- Persist after hydration (never overwrite stored data with defaults or another account's data) ----------
+  usePersist(sharedReady, STORAGE_KEY_RECIPES, recipes);
+  usePersist(sharedReady, STORAGE_KEY_CATEGORIES, categories);
+  usePersist(sharedReady, STORAGE_KEY_REQUESTS, recipeRequests);
+  usePersist(sharedReady, STORAGE_KEY_DELETED_BUILTINS, deletedBuiltInIds);
+  usePersist(isHydrated, personalKey(STORAGE_KEY_FAVS), favoriteIds);
+  usePersist(isHydrated, personalKey(STORAGE_KEY_SHOPPING), shoppingList);
+  usePersist(isHydrated, personalKey(STORAGE_KEY_PANTRY), pantryIngredients);
+  usePersist(isHydrated, personalKey(STORAGE_KEY_SETTINGS), settings);
+  usePersist(isHydrated, personalKey(STORAGE_KEY_TIMERS), cookingTimers);
+  usePersist(isHydrated, personalKey(STORAGE_KEY_SESSION), cookingSession);
+  usePersist(isHydrated, personalKey(STORAGE_KEY_HISTORY), cookHistory);
+  usePersist(isHydrated, personalKey(STORAGE_KEY_MEAL_PLAN), mealPlan);
+
+  // Personal recipes are visible to their owner only (the admin sees every recipe).
+  // Recipes created before accounts were separated have no owner and stay visible to everyone.
+  const visibleRecipes = useMemo(() => isAdmin ? recipes : recipes.filter(r => !r.isCustom || !r.ownerEmail || r.ownerEmail === userEmail), [recipes, isAdmin, userEmail]);
 
   // ---------- Timer clock ----------
   const isTimerRunning = cookingTimers.some(timer => timer.status === 'running');
@@ -292,11 +364,13 @@ export const RecipeProvider = ({
   const clearRecipeTimers = useCallback(recipeId => setCookingTimers(prev => prev.filter(timer => timer.recipeId !== recipeId)), []);
 
   // ---------- Recipes ----------
-  const addRecipe = newRecipeData => {
+  /** Adds a personal recipe, or a catalog recipe ({ system: true }, admin only). */
+  const addRecipe = (newRecipeData, { system = false } = {}) => {
     const newRecipe = normalizeRecipe({
       ...newRecipeData,
-      id: makeId('custom'),
-      isCustom: true,
+      id: makeId(system ? 'sys' : 'custom'),
+      isCustom: !system,
+      ownerEmail: system ? undefined : userEmail || undefined,
       createdAt: new Date().toISOString(),
       colorAccent: newRecipeData.colorAccent || '#FF6B6B'
     });
@@ -318,6 +392,7 @@ export const RecipeProvider = ({
       .filter((timer, idx, list) => list.findIndex(other => other.id === timer.id) === idx));
   };
   const deleteRecipe = id => {
+    if (INITIAL_RECIPES.some(r => r.id === id)) setDeletedBuiltInIds(prev => prev.includes(id) ? prev : [...prev, id]);
     setRecipes(prev => prev.filter(r => r.id !== id));
     setFavoriteIds(prev => prev.filter(fId => fId !== id));
     setCookingSession(session => session?.recipeId === id ? null : session);
@@ -325,7 +400,7 @@ export const RecipeProvider = ({
   };
   const findDuplicateRecipe = candidate => {
     const signature = recipeSignature(candidate);
-    return recipes.find(r => recipeSignature(r) === signature) || null;
+    return visibleRecipes.find(r => recipeSignature(r) === signature) || null;
   };
   const toggleFavorite = id => {
     setFavoriteIds(prev => prev.includes(id) ? prev.filter(fId => fId !== id) : [...prev, id]);
@@ -459,30 +534,116 @@ export const RecipeProvider = ({
     return addToShoppingList([{ name, amount: String(amount || '').trim() || '1', unit: String(unit || '').trim() || 'phần' }], 'Mua tự do');
   };
 
+  // ---------- Categories (admin) ----------
+  const applyCategories = next => {
+    const clean = setRecipeCategories(next);
+    setCategories(clean);
+    return clean;
+  };
+  /** @returns an error message, or null when added. */
+  const addCategory = name => {
+    const error = validateCategoryName(name, categories);
+    if (error) return error;
+    applyCategories([...categories, String(name).trim()]);
+    return null;
+  };
+  /** Renames a category and moves its recipes along. @returns an error message, or null. */
+  const renameCategory = (oldName, newName) => {
+    const error = validateCategoryName(newName, categories, oldName);
+    if (error) return error;
+    const clean = String(newName).trim();
+    // Registry first, so the recipes re-normalized below already accept the new name
+    applyCategories(categories.map(cat => cat === oldName ? clean : cat));
+    setRecipes(prev => prev.map(r => r.category === oldName ? { ...r, category: clean } : r));
+    setSelectedCategory(current => current === oldName ? clean : current);
+    return null;
+  };
+  /** Deletes a category; its recipes move to the default one. @returns an error message, or null. */
+  const deleteCategory = name => {
+    if (categories.length <= 1) return 'Cần giữ lại ít nhất 1 danh mục.';
+    const next = applyCategories(categories.filter(cat => cat !== name));
+    const target = fallbackCategory(next);
+    setRecipes(prev => prev.map(r => r.category === name ? { ...r, category: target } : r));
+    setSelectedCategory(current => current === name ? ALL_CATEGORY : current);
+    return null;
+  };
+  const moveCategory = (name, direction) => {
+    const index = categories.indexOf(name);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= categories.length) return;
+    const next = [...categories];
+    [next[index], next[target]] = [next[target], next[index]];
+    applyCategories(next);
+  };
+  const countRecipesInCategory = name => recipes.filter(r => r.category === name).length;
+
+  // ---------- Meal journal & plan ----------
+  /** Logs (past) or plans (future) a dish. @returns the entry, or null when invalid. */
+  const addMealEntry = input => {
+    const entry = makeMealEntry(input);
+    if (entry) setMealPlan(prev => sanitizeMealPlan([...prev, entry]).slice(-MEAL_PLAN_LIMIT));
+    return entry;
+  };
+  const updateMealEntry = (id, patch) => setMealPlan(prev => sanitizeMealPlan(prev.map(entry => entry.id === id ? { ...entry, ...patch, id } : entry)));
+  const toggleMealEaten = id => setMealPlan(prev => prev.map(entry => entry.id === id ? { ...entry, eaten: !entry.eaten } : entry));
+  const deleteMealEntry = id => {
+    const removed = mealPlan.find(entry => entry.id === id) || null;
+    setMealPlan(prev => prev.filter(entry => entry.id !== id));
+    return removed;
+  };
+  /** Copies every entry of one day onto another (as a plan, or as eaten for a past day). */
+  const copyMealDay = (fromDate, toDate) => {
+    const copies = mealPlan.filter(entry => entry.date === fromDate)
+      .map(entry => makeMealEntry({ ...entry, recipe: entry.recipeId ? getRecipeById(entry.recipeId) || { id: entry.recipeId, title: entry.title } : null, date: toDate, eaten: undefined }))
+      .filter(Boolean);
+    if (copies.length) setMealPlan(prev => sanitizeMealPlan([...prev, ...copies]));
+    return copies.length;
+  };
+  /** Puts the ingredients of planned dishes between two days into the shopping list. */
+  const addPlanToShopping = (from, to) => {
+    const items = plannedIngredients(mealPlan, from, to, getRecipeById, scaleAmount);
+    if (!items.length) return { added: 0, merged: 0, dishes: 0 };
+    const dishes = mealPlan.filter(entry => !entry.eaten && entry.recipeId && entry.date >= from && entry.date <= to && getRecipeById(entry.recipeId)).length;
+    return { ...addToShoppingList(items, 'Kế hoạch bữa ăn'), dishes };
+  };
+
+  // ---------- Recipe requests & reports ----------
+  /** @returns {{ request } | { errors: string[] }} */
+  const submitRecipeRequest = input => {
+    const result = buildRequest(input, recipeRequests);
+    if (result.request) setRecipeRequests(prev => [result.request, ...prev].slice(0, REQUEST_LIMIT));
+    return result;
+  };
+  const updateRecipeRequest = (id, patch) => setRecipeRequests(prev => prev.map(r => r.id === id ? applyRequestUpdate(r, patch) : r));
+  const deleteRecipeRequest = id => setRecipeRequests(prev => prev.filter(r => r.id !== id));
+
   // ---------- Settings & onboarding ----------
-  const updateSettings = patch => setSettings(prev => ({ ...prev, ...patch }));
+  const updateSettings = patch => setSettings(prev => ({ ...prev, ...patch, ...(patch?.calorieGoal != null ? { calorieGoal: clampGoal(patch.calorieGoal) } : {}) }));
   const completeOnboarding = () => {
     setHasSeenOnboarding(true);
-    safeStorage.setItem(STORAGE_KEY_ONBOARDING, 'true');
+    if (userEmail) safeStorage.setItem(personalKey(STORAGE_KEY_ONBOARDING), 'true');
   };
   const resetOnboarding = () => {
     setHasSeenOnboarding(false);
-    safeStorage.removeItem(STORAGE_KEY_ONBOARDING);
+    if (userEmail) safeStorage.removeItem(personalKey(STORAGE_KEY_ONBOARDING));
   };
 
   // ---------- Backup / restore / reset ----------
-  const exportBackup = () => buildBackup({ recipes, favoriteIds, shoppingList, pantryIngredients, settings, cookHistory });
-  // Built-in recipes always come from the app itself; the user's own data is replaced as a whole
-  const replaceUserData = ({ recipes: customRecipes = [], favoriteIds: favs = [], shoppingList: shopping = [], pantry = [], settings: savedSettings = {}, history = [] }) => {
-    const builtIns = INITIAL_RECIPES.map(normalizeRecipe);
-    const builtInIds = new Set(builtIns.map(r => r.id));
-    setRecipes([...customRecipes.filter(r => !builtInIds.has(r.id)), ...builtIns]);
+  const exportBackup = () => buildBackup({ recipes: visibleRecipes, favoriteIds, shoppingList, pantryIngredients, settings, cookHistory, mealPlan });
+  // Catalog recipes (built-in + admin-managed) stay as they are; the user's own data is replaced as a whole
+  const replaceUserData = ({ recipes: customRecipes = [], favoriteIds: favs = [], shoppingList: shopping = [], pantry = [], settings: savedSettings = {}, history = [], mealPlan: plan = [] }) => {
+    // Other accounts' personal recipes are never touched by this account's restore/reset
+    const mine = r => r.isCustom && (!r.ownerEmail || r.ownerEmail === userEmail);
+    const kept = recipes.filter(r => !mine(r));
+    const keptIds = new Set(kept.map(r => r.id));
+    setRecipes([...customRecipes.filter(r => !keptIds.has(r.id)).map(r => normalizeRecipe({ ...r, ownerEmail: userEmail || undefined })).filter(Boolean), ...kept]);
+    setMealPlan(sanitizeMealPlan(plan));
     setFavoriteIds(favs);
     shoppingRef.current = shopping;
     setShoppingList(shopping);
     pantryRef.current = pantry;
     setPantryIngredients(pantry);
-    setSettings({ ...DEFAULT_SETTINGS, ...savedSettings });
+    setSettings({ ...DEFAULT_SETTINGS, ...savedSettings, calorieGoal: clampGoal(savedSettings.calorieGoal) });
     setCookHistory(history);
     setCookingSession(null);
     setCookingTimers([]);
@@ -498,6 +659,7 @@ export const RecipeProvider = ({
 
   return <RecipeContext.Provider value={{
     isHydrated,
+    sharedReady,
     timers,
     getStepTimer,
     startStepTimer,
@@ -512,7 +674,7 @@ export const RecipeProvider = ({
     exportBackup,
     restoreBackup,
     resetAllData,
-    recipes,
+    recipes: visibleRecipes,
     favoriteIds,
     selectedCategory,
     setSelectedCategory,
@@ -548,7 +710,24 @@ export const RecipeProvider = ({
     updateSettings,
     hasSeenOnboarding,
     completeOnboarding,
-    resetOnboarding
+    resetOnboarding,
+    categories,
+    addCategory,
+    renameCategory,
+    deleteCategory,
+    moveCategory,
+    countRecipesInCategory,
+    mealPlan,
+    addMealEntry,
+    updateMealEntry,
+    toggleMealEaten,
+    deleteMealEntry,
+    copyMealDay,
+    addPlanToShopping,
+    recipeRequests,
+    submitRecipeRequest,
+    updateRecipeRequest,
+    deleteRecipeRequest
   }}>
       {children}
     </RecipeContext.Provider>;

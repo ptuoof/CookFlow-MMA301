@@ -4,12 +4,13 @@ import { normalizeRecipe } from './recipeModel';
 import { sanitizeHistory } from './history';
 import { normalizeUnit } from './units';
 import { ALLERGEN_IDS } from './dietary';
+import { sanitizeMealPlan } from './mealPlan';
 
 export const BACKUP_FORMAT = 'cookflow-backup';
 export const BACKUP_VERSION = 1;
 const BOOLEAN_SETTINGS = ['keepAwake', 'timerSound', 'vibration', 'timerNotifications', 'assumeStaples', 'autoStockPantry', 'hideAllergenRecipes'];
 
-export const buildBackup = ({ recipes, favoriteIds, shoppingList, pantryIngredients, settings, cookHistory }) => ({
+export const buildBackup = ({ recipes, favoriteIds, shoppingList, pantryIngredients, settings, cookHistory, mealPlan }) => ({
   format: BACKUP_FORMAT,
   version: BACKUP_VERSION,
   exportedAt: new Date().toISOString(),
@@ -19,7 +20,8 @@ export const buildBackup = ({ recipes, favoriteIds, shoppingList, pantryIngredie
     shoppingList: shoppingList || [],
     pantry: pantryIngredients || [],
     settings: settings || {},
-    history: cookHistory || []
+    history: cookHistory || [],
+    mealPlan: mealPlan || []
   }
 });
 
@@ -33,6 +35,7 @@ const sanitizeSettings = settings => {
   BOOLEAN_SETTINGS.forEach(key => {
     if (typeof settings[key] === 'boolean') clean[key] = settings[key];
   });
+  if (typeof settings.calorieGoal === 'number' && Number.isFinite(settings.calorieGoal)) clean.calorieGoal = Number(settings.calorieGoal);
   if (Array.isArray(settings.allergies)) clean.allergies = settings.allergies.filter(id => ALLERGEN_IDS.includes(id));
   return clean;
 };
@@ -74,7 +77,9 @@ export const parseBackup = text => {
       })),
     pantry: (Array.isArray(data.pantry) ? data.pantry : []).filter(name => typeof name === 'string' && name.trim()),
     settings: sanitizeSettings(data.settings),
-    history: sanitizeHistory(data.history)
+    history: sanitizeHistory(data.history),
+    // Older backups (before the meal plan existed) simply have none
+    mealPlan: sanitizeMealPlan(data.mealPlan)
   };
   return {
     data: clean,
@@ -84,6 +89,7 @@ export const parseBackup = text => {
       shopping: clean.shoppingList.length,
       pantry: clean.pantry.length,
       history: clean.history.length,
+      meals: clean.mealPlan.length,
       // Album photos/videos are files on the old device; they do not travel with the backup
       localMedia: recipes.filter(r => /^(file|content):/i.test(r.imageUrl || '')).length
     }

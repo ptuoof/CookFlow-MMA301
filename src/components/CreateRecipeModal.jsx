@@ -6,13 +6,12 @@ import { normalizeVi } from '../utils/text';
 import { DEFAULT_RECIPE_IMAGE, makeId } from '../utils/recipeModel';
 import { persistMedia } from '../utils/media';
 import { MINUTES_MAX, SERVINGS_MAX, SERVINGS_MIN, TIMER_MINUTES_MAX } from '../constants/limits';
-import { CATEGORIES as ALL_CATEGORIES } from '../types/recipe';
+import { estimateCalories, KCAL_MAX, MACRO_MAX, caloriesFromMacros } from '../utils/nutrition';
 import { DIET_TAGS, detectAllergens } from '../utils/dietary';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
-const CATEGORIES = ALL_CATEGORIES.filter(cat => cat !== 'Tất cả');
 const DIFFICULTIES = ['Dễ', 'Vừa', 'Khó'];
 const COPY_SUFFIX = ' (bản sao)';
 const emptyIngredient = () => ({ id: makeId('i'), name: '', amount: '', unit: 'gram' });
@@ -30,6 +29,10 @@ const toFormState = recipe => recipe ? {
   servings: recipe.servings.toString(),
   difficulty: recipe.difficulty,
   tags: recipe.tags || [],
+  calories: recipe.calories ? String(recipe.calories) : '',
+  protein: recipe.nutrition?.protein != null ? String(recipe.nutrition.protein) : '',
+  carbs: recipe.nutrition?.carbs != null ? String(recipe.nutrition.carbs) : '',
+  fat: recipe.nutrition?.fat != null ? String(recipe.nutrition.fat) : '',
   ingredients: recipe.ingredients,
   steps: recipe.steps.map(s => ({
     id: s.id,
@@ -51,6 +54,10 @@ const toFormState = recipe => recipe ? {
   servings: '2',
   difficulty: 'Dễ',
   tags: [],
+  calories: '',
+  protein: '',
+  carbs: '',
+  fat: '',
   ingredients: [emptyIngredient()],
   steps: [emptyStep('Chuẩn bị nguyên liệu')]
 };
@@ -59,6 +66,7 @@ const toFormState = recipe => recipe ? {
 const snapshotOf = form => JSON.stringify([
   form.title, form.description, form.imageUrl, form.videoUrl, form.category,
   form.prepTime, form.cookTime, form.servings, form.difficulty, [...(form.tags || [])].sort(),
+  form.calories, form.protein, form.carbs, form.fat,
   form.ingredients.map(i => [i.name, i.amount, i.unit].map(v => String(v ?? '').trim())),
   form.steps.map(s => [s.title, s.instruction, s.timerMinutes, s.tip, s.image, s.videoUrl].map(v => String(v ?? '').trim()))
 ].map(v => typeof v === 'string' ? v.trim() : v));
@@ -67,12 +75,17 @@ export const CreateRecipeModal = ({
   visible,
   onClose,
   editingRecipe,
-  templateRecipe
+  templateRecipe,
+  // Admin: new recipes go to the shared catalog instead of "Của tôi"
+  asCatalog = false,
+  // Pre-filled title for a new recipe (e.g. from a user's recipe request)
+  prefillTitle = ''
 }) => {
   const {
     addRecipe,
     updateRecipe,
-    findDuplicateRecipe
+    findDuplicateRecipe,
+    categories: CATEGORIES
   } = useRecipes();
 
   // Recipe basic info
@@ -88,6 +101,11 @@ export const CreateRecipeModal = ({
   const [servings, setServings] = useState('2');
   const [difficulty, setDifficulty] = useState('Dễ');
   const [tags, setTags] = useState([]);
+  // Nutrition per serving (text while typing)
+  const [calories, setCalories] = useState('');
+  const [protein, setProtein] = useState('');
+  const [carbs, setCarbs] = useState('');
+  const [fat, setFat] = useState('');
 
   // Ingredients
   const [ingredients, setIngredients] = useState(() => [emptyIngredient()]);
@@ -107,12 +125,17 @@ export const CreateRecipeModal = ({
     // If it's a web URL, default to link, else album
     setImageSourceMode(form.imageUrl?.startsWith('http') ? 'link' : 'album');
     setVideoSourceMode(form.videoUrl?.startsWith('http') ? 'link' : 'album');
-    setCategory(form.category);
+    // The admin may have renamed/deleted the default category
+    setCategory(CATEGORIES.includes(form.category) ? form.category : CATEGORIES[0]);
     setPrepTime(form.prepTime);
     setCookTime(form.cookTime);
     setServings(form.servings);
     setDifficulty(form.difficulty);
     setTags(form.tags || []);
+    setCalories(form.calories || '');
+    setProtein(form.protein || '');
+    setCarbs(form.carbs || '');
+    setFat(form.fat || '');
     setIngredients(form.ingredients);
     setSteps(form.steps);
     initialSnapshotRef.current = snapshotOf(form);
@@ -121,8 +144,9 @@ export const CreateRecipeModal = ({
     if (editingRecipe) applyFormState(toFormState(editingRecipe));
     // A copy starts from the template's values; nothing is saved until the user taps Lưu
     else if (templateRecipe) applyFormState({ ...toFormState(templateRecipe), title: `${templateRecipe.title}${COPY_SUFFIX}` });
-    else applyFormState(toFormState(null));
-  }, [editingRecipe, templateRecipe, visible]);
+    else applyFormState({ ...toFormState(null), title: prefillTitle || '' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingRecipe, templateRecipe, visible, prefillTitle]);
   const resetForm = () => applyFormState(toFormState(null));
 
   // Image & Video Picker Handlers
@@ -256,6 +280,19 @@ export const CreateRecipeModal = ({
       setSteps(prev => prev.filter((_, i) => i !== index));
     }
   };
+  // Fills kcal from the ingredient list (rough reference table); the user can still adjust it
+  const handleEstimateCalories = () => {
+    const portions = parseIntInRange(servings, SERVINGS_MIN, SERVINGS_MAX) || 1;
+    const result = estimateCalories({ servings: portions, ingredients: ingredients.filter(i => (i.name || '').trim()) });
+    if (!result.perServing) {
+      showAlert('Chưa ước tính được', 'Hãy nhập nguyên liệu kèm định lượng (vd: 300 g thịt bò, 2 quả trứng) rồi thử lại.');
+      return;
+    }
+    setCalories(String(result.perServing));
+    showAlert('Đã ước tính ≈ ' + result.perServing + ' kcal/phần', result.unmatched.length
+      ? `Chưa tính: ${result.unmatched.join(', ')}. Hãy chỉnh lại nếu cần.`
+      : 'Giá trị tham khảo theo bảng dinh dưỡng phổ biến — bạn có thể chỉnh lại.');
+  };
   const handleSave = async () => {
     if (isSaving) return;
     const errors = [];
@@ -268,6 +305,15 @@ export const CreateRecipeModal = ({
     if (cook === null) errors.push(`Thời gian nấu phải là số phút từ 0 đến ${MINUTES_MAX}.`);
     if (prep !== null && cook !== null && prep + cook === 0) errors.push('Tổng thời gian sơ chế + nấu phải lớn hơn 0 phút.');
     if (portions === null) errors.push(`Khẩu phần phải từ ${SERVINGS_MIN} đến ${SERVINGS_MAX} người.`);
+    // Nutrition is optional, but a typed value must be a whole number in range
+    const kcal = calories.trim() ? parseIntInRange(calories, 1, KCAL_MAX) : null;
+    if (calories.trim() && kcal === null) errors.push(`Calo phải là số nguyên từ 1 đến ${KCAL_MAX} kcal/phần.`);
+    const macros = {};
+    [['protein', protein, 'Đạm'], ['carbs', carbs, 'Tinh bột'], ['fat', fat, 'Chất béo']].forEach(([key, text, label]) => {
+      const value = text.trim() ? parseIntInRange(text, 0, MACRO_MAX) : null;
+      if (text.trim() && value === null) errors.push(`${label} phải là số gam từ 0 đến ${MACRO_MAX}.`);
+      macros[key] = value;
+    });
     const validIngredients = ingredients
       .filter(i => (i.name || '').trim() !== '')
       .map((i, idx) => ({ ...i, id: i.id || `i${idx + 1}`, name: i.name.trim(), amount: String(i.amount ?? '').trim() || 'Vừa đủ', unit: String(i.unit ?? '').trim() }));
@@ -324,21 +370,26 @@ export const CreateRecipeModal = ({
       servings: portions,
       difficulty,
       tags,
+      calories: kcal ?? caloriesFromMacros(macros),
+      nutrition: macros,
       ingredients: validIngredients,
       steps: validSteps
     };
     const commit = () => {
       if (editingRecipe) {
         updateRecipe({ ...editingRecipe, ...payload });
-        showAlert('Thành công! 🎉', 'Công thức của bạn đã được cập nhật.');
+        showAlert('Thành công! 🎉', asCatalog ? 'Đã cập nhật công thức.' : 'Công thức của bạn đã được cập nhật.');
       } else if (templateRecipe) {
         // Keep fields the form does not edit (calories, accent color); the copy stands on its own
         const { id, isCustom, createdAt, updatedAt, variantOf, aiChanges, copiedFrom, ...rest } = templateRecipe;
         addRecipe({ ...rest, ...payload, copiedFrom: id, colorAccent: rest.colorAccent || HeronColors.brand });
-        showAlert('Đã tạo bản sao 🎉', `"${payload.title}" đã được lưu vào mục "Của tôi → Tự tạo". Công thức gốc giữ nguyên.`);
+        showAlert('Đã tạo bản sao 🎉', `"${payload.title}" đã được lưu vào mục "Hồ sơ → Món của tôi → Tự tạo". Công thức gốc giữ nguyên.`);
+      } else if (asCatalog) {
+        addRecipe({ ...payload, colorAccent: HeronColors.brand }, { system: true });
+        showAlert('Đã thêm vào kho công thức 🎉', `"${payload.title}" đã hiển thị cho mọi người dùng ở trang Khám phá.`);
       } else {
         addRecipe({ ...payload, colorAccent: HeronColors.brand });
-        showAlert('Thành công! 🎉', 'Món mới đã được lưu vào mục "Của tôi → Tự tạo".');
+        showAlert('Thành công! 🎉', 'Món mới đã được lưu vào mục "Hồ sơ → Món của tôi → Tự tạo".');
       }
       resetForm();
       onClose();
@@ -360,7 +411,7 @@ export const CreateRecipeModal = ({
   const handleRequestClose = () => {
     // Any edited field counts (amounts, timers, tips, media...), not only the title or row count
     const isDirty = snapshotOf({
-      title, description, imageUrl, videoUrl, category, prepTime, cookTime, servings, difficulty, tags, ingredients, steps
+      title, description, imageUrl, videoUrl, category, prepTime, cookTime, servings, difficulty, tags, calories, protein, carbs, fat, ingredients, steps
     }) !== initialSnapshotRef.current;
     if (!isDirty) return onClose();
     return confirmAction({
@@ -573,6 +624,32 @@ export const CreateRecipeModal = ({
                 <View style={styles.subInputWrap}>
                   <Text style={styles.label}>Khẩu phần</Text>
                   <TextInput style={styles.input} keyboardType="numeric" value={servings} onChangeText={setServings} />
+                </View>
+              </View>
+
+              {/* Dinh dưỡng / 1 phần */}
+              <View style={styles.nutritionHead}>
+                <Text style={styles.label}>Dinh dưỡng mỗi phần (tùy chọn)</Text>
+                <Pressable accessibilityRole="button" hitSlop={6} onPress={handleEstimateCalories} style={styles.estimateBtn}>
+                  <Text style={styles.estimateText}>⚡ Ước tính kcal</Text>
+                </Pressable>
+              </View>
+              <View style={styles.rowInputs}>
+                <View style={styles.subInputWrap}>
+                  <Text style={styles.subLabel}>Calo (kcal)</Text>
+                  <TextInput style={styles.input} keyboardType="numeric" placeholder="vd 450" placeholderTextColor={HeronColors.disable} value={calories} onChangeText={setCalories} />
+                </View>
+                <View style={styles.subInputWrap}>
+                  <Text style={styles.subLabel}>Đạm (g)</Text>
+                  <TextInput style={styles.input} keyboardType="numeric" placeholder="—" placeholderTextColor={HeronColors.disable} value={protein} onChangeText={setProtein} />
+                </View>
+                <View style={styles.subInputWrap}>
+                  <Text style={styles.subLabel}>Tinh bột (g)</Text>
+                  <TextInput style={styles.input} keyboardType="numeric" placeholder="—" placeholderTextColor={HeronColors.disable} value={carbs} onChangeText={setCarbs} />
+                </View>
+                <View style={styles.subInputWrap}>
+                  <Text style={styles.subLabel}>Béo (g)</Text>
+                  <TextInput style={styles.input} keyboardType="numeric" placeholder="—" placeholderTextColor={HeronColors.disable} value={fat} onChangeText={setFat} />
                 </View>
               </View>
 
@@ -1170,6 +1247,24 @@ const styles = StyleSheet.create({
   },
   subInputWrap: {
     flex: 1
+  },
+  nutritionHead: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 8
+  },
+  estimateBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: Radius.full,
+    backgroundColor: HeronColors.brandLight,
+    marginBottom: 6
+  },
+  estimateText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: HeronColors.brandHover
   },
   difficultyRow: {
     flexDirection: 'row',

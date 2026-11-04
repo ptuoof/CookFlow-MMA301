@@ -7,6 +7,7 @@ import { buildPersonalVariant, shoppingItemsForChanges } from '../services/recip
 import { useRecipes } from '../context/RecipeContext';
 import { showAlert } from '../utils/dialog';
 import { allergenLabel } from '../utils/dietary';
+import { AiChefLogo } from './ui/AiChefLogo';
 export const SOUS_CHEF_SUGGESTIONS = [{
   icon: '💡',
   label: 'Thay thế gia vị',
@@ -19,6 +20,20 @@ export const SOUS_CHEF_SUGGESTIONS = [{
   icon: '🍷',
   label: 'Thức uống kèm',
   prompt: 'Gợi ý thức uống phù hợp dùng kèm món này?'
+}];
+// Without a recipe (opened from the home screen) the assistant helps plan and pick dishes
+export const GENERAL_SUGGESTIONS = [{
+  icon: '🗓',
+  label: 'Lên thực đơn tuần',
+  prompt: 'Gợi ý thực đơn 7 ngày (sáng, trưa, tối) cân bằng dinh dưỡng, khoảng 1800–2000 kcal mỗi ngày, dễ nấu tại nhà.'
+}, {
+  icon: '🔥',
+  label: 'Món dưới 400 kcal',
+  prompt: 'Gợi ý 5 món Việt dưới 400 kcal mỗi phần, no lâu, nấu trong 30 phút.'
+}, {
+  icon: '🧊',
+  label: 'Tủ lạnh còn gì nấu nấy',
+  prompt: 'Mình còn trứng, cà chua, hành lá và cơm nguội. Nấu được món gì ngon?'
 }];
 const RESCUE_SUGGESTION = {
   icon: '🆘',
@@ -248,7 +263,7 @@ export const AiChefChatModal = ({
     setApiKey(fallbackKey);
     setIsEditingKey(!fallbackKey);
   };
-  const suggestions = currentStep ? [RESCUE_SUGGESTION, ...SOUS_CHEF_SUGGESTIONS] : SOUS_CHEF_SUGGESTIONS;
+  const suggestions = !recipe ? GENERAL_SUGGESTIONS : currentStep ? [RESCUE_SUGGESTION, ...SOUS_CHEF_SUGGESTIONS] : SOUS_CHEF_SUGGESTIONS;
   const showKeySetup = apiKey === '' || isEditingKey;
   const renderKeySetup = () => <ScrollView contentContainerStyle={styles.setupWrap} keyboardShouldPersistTaps="handled">
       <View style={styles.setupCard}>
@@ -306,7 +321,7 @@ export const AiChefChatModal = ({
         </ScrollView>
 
         <Text style={styles.proposalHint}>
-          {existingVariant || liveRecipe?.variantOf ? `Lưu sẽ cập nhật “${(existingVariant || liveRecipe).title}”.` : 'Lưu sẽ tạo bản sao riêng trong Của tôi → Tự tạo. Công thức gốc giữ nguyên.'}
+          {existingVariant || liveRecipe?.variantOf ? `Lưu sẽ cập nhật “${(existingVariant || liveRecipe).title}”.` : 'Lưu sẽ tạo bản sao riêng trong Hồ sơ → Món của tôi → Tự tạo. Công thức gốc giữ nguyên.'}
         </Text>
 
         <AppleButton title={proposal.cartDone ? '✓ Đã thêm vào giỏ đi chợ' : '🛒 Thêm vào giỏ đi chợ'} variant="outline" onPress={handleAddToCart} disabled={proposal.cartDone || selectedChanges.length === 0} style={{
@@ -329,7 +344,7 @@ export const AiChefChatModal = ({
       animated: true
     })}>
         {messages.length === 0 ? <View style={styles.emptyState}>
-            <Text style={styles.emptyEmoji}>👨‍🍳</Text>
+            <View style={styles.emptyLogo}><AiChefLogo size={72} /></View>
             <Text style={styles.emptyTitle}>Chào bạn, mình là phụ bếp AI!</Text>
             <Text style={styles.emptyDesc}>
               Hỏi mình bất cứ điều gì về {recipe ? `món "${recipe.title}"` : 'nấu ăn'}: thay thế nguyên liệu, biến tấu, mẹo cứu món...
@@ -338,7 +353,7 @@ export const AiChefChatModal = ({
 
         {messages.map(m => <View key={m.id} style={[styles.bubbleRow, m.role === 'user' && styles.bubbleRowUser]}>
             {m.role === 'model' ? <View style={styles.avatar}>
-                <Text style={styles.avatarText}>🤖</Text>
+                <AiChefLogo size={28} variant="soft" />
               </View> : null}
             <View style={styles.bubbleColumn}>
               <View style={[styles.bubble, m.role === 'user' ? styles.bubbleUser : styles.bubbleModel, m.isError && styles.bubbleError]}>
@@ -362,7 +377,7 @@ export const AiChefChatModal = ({
 
         {isLoading ? <View style={styles.bubbleRow}>
             <View style={styles.avatar}>
-              <Text style={styles.avatarText}>🤖</Text>
+              <AiChefLogo size={28} variant="soft" />
             </View>
             <View style={[styles.bubble, styles.bubbleModel, styles.typingBubble]}>
               <ActivityIndicator size="small" color={HeronColors.brand} />
@@ -386,7 +401,7 @@ export const AiChefChatModal = ({
 
       {/* Composer */}
       <View style={styles.composer}>
-        <TextInput style={styles.composerInput} placeholder="Hỏi Sous-Chef về món này..." placeholderTextColor={HeronColors.disable} value={input} onChangeText={setInput} multiline maxLength={500} onSubmitEditing={() => sendQuestion(input)} blurOnSubmit />
+        <TextInput style={styles.composerInput} placeholder={recipe ? 'Hỏi Sous-Chef về món này...' : 'Hỏi Sous-Chef bất cứ điều gì về nấu ăn...'} placeholderTextColor={HeronColors.disable} value={input} onChangeText={setInput} multiline maxLength={500} onSubmitEditing={() => sendQuestion(input)} blurOnSubmit />
         <Pressable onPress={() => sendQuestion(input)} disabled={!input.trim() || isLoading} style={[styles.sendBtn, (!input.trim() || isLoading) && styles.sendBtnDisabled]}>
           <Text style={styles.sendBtnText}>➤</Text>
         </Pressable>
@@ -400,6 +415,7 @@ export const AiChefChatModal = ({
 
         {/* Header */}
         <View style={styles.header}>
+          <AiChefLogo size={44} />
           <View style={{
           flex: 1
         }}>
@@ -583,10 +599,11 @@ const styles = StyleSheet.create({
   avatar: {
     width: 28,
     height: 28,
-    borderRadius: 14,
-    backgroundColor: HeronColors.brandLight,
     alignItems: 'center',
     justifyContent: 'center'
+  },
+  emptyLogo: {
+    marginBottom: 10
   },
   avatarText: {
     fontSize: 14

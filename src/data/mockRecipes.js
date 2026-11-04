@@ -9,6 +9,8 @@ export const INITIAL_RECIPES = [{
   cookTimeMinutes: 6,
   servings: 4,
   calories: 145,
+  // per serving, grams
+  nutrition: { protein: 9, carbs: 6, fat: 9 },
   difficulty: 'Dễ',
   colorAccent: '#FFD43B',
   ingredients: [{
@@ -90,6 +92,8 @@ export const INITIAL_RECIPES = [{
   cookTimeMinutes: 25,
   servings: 3,
   calories: 420,
+  // per serving, grams
+  nutrition: { protein: 24, carbs: 22, fat: 26 },
   difficulty: 'Vừa',
   colorAccent: '#FF6B6B',
   ingredients: [{
@@ -161,6 +165,8 @@ export const INITIAL_RECIPES = [{
   cookTimeMinutes: 8,
   servings: 2,
   calories: 280,
+  // per serving, grams
+  nutrition: { protein: 22, carbs: 12, fat: 16 },
   difficulty: 'Dễ',
   colorAccent: '#38D9A9',
   ingredients: [{
@@ -226,6 +232,8 @@ export const INITIAL_RECIPES = [{
   cookTimeMinutes: 6,
   servings: 2,
   calories: 520,
+  // per serving, grams
+  nutrition: { protein: 42, carbs: 6, fat: 36 },
   difficulty: 'Khó',
   colorAccent: '#FFA94D',
   ingredients: [{
@@ -297,6 +305,8 @@ export const INITIAL_RECIPES = [{
   cookTimeMinutes: 10,
   servings: 2,
   calories: 120,
+  // per serving, grams
+  nutrition: { protein: 0, carbs: 30, fat: 0 },
   difficulty: 'Dễ',
   colorAccent: '#FF922B',
   ingredients: [{
@@ -360,6 +370,8 @@ export const INITIAL_RECIPES = [{
   cookTimeMinutes: 5,
   servings: 4,
   calories: 190,
+  // per serving, grams
+  nutrition: { protein: 3, carbs: 28, fat: 8 },
   difficulty: 'Dễ',
   colorAccent: '#FCC419',
   ingredients: [{
