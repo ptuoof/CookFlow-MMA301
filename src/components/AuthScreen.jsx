@@ -78,7 +78,7 @@ export function AuthScreen() {
           {mode === 'login' && <Pressable onPress={() => changeMode('forgot')} style={styles.forgot}><Text style={styles.link}>Quên mật khẩu?</Text></Pressable>}
           {(mode === 'login' || mode === 'register') && <>
             <View style={styles.divider}><View style={styles.rule}/><Text style={styles.or}>hoặc</Text><View style={styles.rule}/></View>
-            <Pressable accessibilityRole="button" onPress={async () => { setBusy(true); try { await signInWithGoogle(); } finally { setBusy(false); } }} style={({ pressed }) => [styles.google, pressed && styles.pressed]}><Text style={styles.googleMark}>G</Text><Text style={styles.googleText}>Tiếp tục với Google · Demo</Text></Pressable>
+            <Pressable accessibilityRole="button" onPress={async () => { setBusy(true); setError(''); try { await signInWithGoogle(); } catch (e) { setError(e.message); } finally { setBusy(false); } }} style={({ pressed }) => [styles.google, pressed && styles.pressed]}><Text style={styles.googleMark}>G</Text><Text style={styles.googleText}>Tiếp tục với Google · Demo</Text></Pressable>
           </>}
           <View style={styles.switchRow}>
             {mode === 'login' ? <><Text style={styles.switchText}>Chưa có tài khoản? </Text><Text accessibilityRole="link" onPress={() => changeMode('register')} style={styles.link}>Đăng ký</Text></> : mode === 'register' ? <><Text style={styles.switchText}>Đã có tài khoản? </Text><Text accessibilityRole="link" onPress={() => changeMode('login')} style={styles.link}>Đăng nhập</Text></> : <Text accessibilityRole="link" onPress={() => changeMode('login')} style={styles.link}>Quay lại đăng nhập</Text>}

@@ -61,7 +61,7 @@ export const QrScannerModal = ({
     if (onImported) onImported(saved);
     // Wait for the sheet to dismiss so the alert is not torn down with it on iOS
     setTimeout(() => {
-      showAlert('Đã nhận món! 🎉', `"${saved.title}" đã được lưu vào mục Của tôi → Tự tạo.`);
+      showAlert('Đã nhận món! 🎉', `"${saved.title}" đã được lưu vào mục Hồ sơ → Món của tôi → Tự tạo.`);
     }, 450);
   };
   const handleSave = () => {
