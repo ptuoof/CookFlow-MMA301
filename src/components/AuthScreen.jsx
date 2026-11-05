@@ -8,7 +8,7 @@ import { isAcceptablePassword, isValidEmail, passwordStrength } from '../utils/a
 const modes = { login: 'Đăng nhập', register: 'Tạo tài khoản', verify: 'Xác minh email', forgot: 'Quên mật khẩu', reset: 'Đặt mật khẩu mới' };
 
 export function AuthScreen() {
-  const { login, register, verify, resetPassword, signInWithGoogle, pendingEmail } = useAuth();
+  const { login, register, verify, resendCode, requestPasswordReset, resetPassword, cancelVerification, pendingEmail, devCode, connectionError } = useAuth();
   const [mode, setMode] = useState(pendingEmail ? 'verify' : 'login');
   const [name, setName] = useState('');
   const [email, setEmail] = useState(pendingEmail || '');
@@ -26,7 +26,13 @@ export function AuthScreen() {
     if (pendingEmail) { setEmail(pendingEmail); setMode('verify'); }
   }, [pendingEmail]);
 
-  const changeMode = next => { setMode(next); setError(''); setMessage(''); setPassword(''); setConfirm(''); setCode(''); setEmailTouched(false); setShowPassword(false); };
+  // While no mail server is configured, the server returns the code in development
+  const codeHint = sent => sent ? ` Mã (môi trường thử nghiệm): ${sent}` : '';
+
+  const changeMode = next => {
+    if (mode === 'verify' && next !== 'verify') cancelVerification();
+    setMode(next); setError(''); setMessage(''); setPassword(''); setConfirm(''); setCode(''); setEmailTouched(false); setShowPassword(false);
+  };
   const submit = async () => {
     setError(''); setMessage('');
     if (!email.trim()) return setError('Hãy nhập email của bạn.');
@@ -36,16 +42,30 @@ export function AuthScreen() {
       if (!isAcceptablePassword(password)) return setError('Mật khẩu cần từ 8 ký tự và đạt mức trung bình trở lên.');
       if (password !== confirm) return setError('Mật khẩu xác nhận chưa khớp.');
     }
-    if ((mode === 'verify' || mode === 'reset') && code.trim() !== '123456') return setError('Mã chưa chính xác. Hãy dùng mã demo 123456.');
+    if ((mode === 'verify' || mode === 'reset') && !/^\d{6}$/.test(code.trim())) return setError('Mã gồm 6 chữ số.');
     if (mode === 'reset' && (!isAcceptablePassword(password) || password !== confirm)) return setError(!isAcceptablePassword(password) ? 'Mật khẩu cần từ 8 ký tự và đạt mức trung bình trở lên.' : 'Mật khẩu xác nhận chưa khớp.');
     setBusy(true);
     try {
-      if (mode === 'register') { await register({ name, email, password }); setMode('verify'); setCode(''); setMessage('Tài khoản đã tạo. Nhập mã xác minh demo 123456 để tiếp tục.'); }
-      else if (mode === 'verify') { await verify(email.trim().toLowerCase()); }
+      if (mode === 'register') { await register({ name, email, password }); setCode(''); setMessage('Tài khoản đã tạo. Nhập mã xác minh 6 chữ số đã gửi tới email của bạn.'); }
+      else if (mode === 'verify') { await verify(email, code); }
       else if (mode === 'login') { await login(email, password); }
-      else if (mode === 'forgot') { setMode('reset'); setMessage('Mã đặt lại demo là 123456. Nhập mã rồi chọn mật khẩu mới.'); }
-      else if (mode === 'reset') { if (code.trim() !== '123456') throw new Error('Mã chưa chính xác. Hãy dùng mã demo 123456.'); await resetPassword(email, password); setMode('login'); setMessage('Đã đổi mật khẩu. Bạn có thể đăng nhập.'); setPassword(''); setConfirm(''); }
-    } catch (e) { setError(e.message || 'Chưa thể hoàn tất thao tác.'); }
+      else if (mode === 'forgot') { await requestPasswordReset(email); setMode('reset'); setCode(''); setMessage('Nếu email đã đăng ký, mã đặt lại mật khẩu đã được gửi. Nhập mã rồi chọn mật khẩu mới.'); }
+      else if (mode === 'reset') { await resetPassword(email, code, password); setMode('login'); setMessage('Đã đổi mật khẩu. Bạn có thể đăng nhập.'); setPassword(''); setConfirm(''); setCode(''); }
+    } catch (e) {
+      // A login of an unverified account switches to the verification step (pendingEmail)
+      if (e.code === 'EMAIL_NOT_VERIFIED') setMessage('Tài khoản chưa xác minh. Nhập mã 6 chữ số đã gửi tới email của bạn.');
+      else setError(e.message || 'Chưa thể hoàn tất thao tác.');
+    }
+    finally { setBusy(false); }
+  };
+  const resend = async () => {
+    setError(''); setMessage('');
+    setBusy(true);
+    try {
+      if (mode === 'reset') await requestPasswordReset(email);
+      else await resendCode(email);
+      setMessage('Đã gửi mã mới.');
+    } catch (e) { setError(e.message || 'Chưa gửi lại được mã.'); }
     finally { setBusy(false); }
   };
 
@@ -70,20 +90,17 @@ export function AuthScreen() {
           {mode === 'verify' && field('Mã xác minh', code, setCode, { number: true, placeholder: 'Nhập mã 6 chữ số' })}
           {mode === 'login' && field('Mật khẩu', password, setPassword, { secret: true })}
           {(mode === 'register' || mode === 'reset') && <>{mode === 'reset' && field('Mã đặt lại', code, setCode, { number: true, placeholder: 'Nhập mã 6 chữ số' })}{field(mode === 'register' ? 'Mật khẩu' : 'Mật khẩu mới', password, setPassword, { secret: true })}<View style={styles.strengthWrap}><View style={styles.strengthBars}>{strength.checks.map((passed, index) => <View key={index} style={[styles.strengthBar, passed && (strength.score < 3 ? styles.strengthWeak : strength.score < 5 ? styles.strengthMedium : styles.strengthStrong)]}/>)}</View><Text style={[styles.strengthLabel, strength.score < 3 ? styles.strengthLabelWeak : strength.score < 5 ? styles.strengthLabelMedium : styles.strengthLabelStrong]}>Độ mạnh: {strength.label}</Text><Text style={styles.strengthHint}>Dùng ít nhất 8 ký tự, kết hợp chữ hoa, chữ thường, số hoặc ký tự đặc biệt.</Text></View>{field('Xác nhận mật khẩu', confirm, setConfirm, { secret: true })}</>}
-          {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
-          {!!message && <Text style={styles.message}>{message}</Text>}
+          {!!(error || (!message && connectionError)) && <Text accessibilityRole="alert" style={styles.error}>{error || connectionError}</Text>}
+          {!!message && <Text style={styles.message}>{message}{(mode === 'verify' || mode === 'reset') ? codeHint(devCode) : ''}</Text>}
           <Pressable accessibilityRole="button" disabled={busy} onPress={submit} style={({ pressed }) => [styles.primary, pressed && styles.pressed, busy && styles.disabled]}>
             {busy ? <ActivityIndicator color="#fff"/> : <Text style={styles.primaryText}>{mode === 'login' ? 'Đăng nhập' : mode === 'register' ? 'Tạo tài khoản' : mode === 'verify' ? 'Xác minh tài khoản' : mode === 'forgot' ? 'Tiếp tục' : 'Đổi mật khẩu'}</Text>}
           </Pressable>
           {mode === 'login' && <Pressable onPress={() => changeMode('forgot')} style={styles.forgot}><Text style={styles.link}>Quên mật khẩu?</Text></Pressable>}
-          {(mode === 'login' || mode === 'register') && <>
-            <View style={styles.divider}><View style={styles.rule}/><Text style={styles.or}>hoặc</Text><View style={styles.rule}/></View>
-            <Pressable accessibilityRole="button" onPress={async () => { setBusy(true); setError(''); try { await signInWithGoogle(); } catch (e) { setError(e.message); } finally { setBusy(false); } }} style={({ pressed }) => [styles.google, pressed && styles.pressed]}><Text style={styles.googleMark}>G</Text><Text style={styles.googleText}>Tiếp tục với Google · Demo</Text></Pressable>
-          </>}
+          {(mode === 'verify' || mode === 'reset') && <Pressable disabled={busy} onPress={resend} style={styles.forgot}><Text style={styles.link}>Gửi lại mã</Text></Pressable>}
           <View style={styles.switchRow}>
             {mode === 'login' ? <><Text style={styles.switchText}>Chưa có tài khoản? </Text><Text accessibilityRole="link" onPress={() => changeMode('register')} style={styles.link}>Đăng ký</Text></> : mode === 'register' ? <><Text style={styles.switchText}>Đã có tài khoản? </Text><Text accessibilityRole="link" onPress={() => changeMode('login')} style={styles.link}>Đăng nhập</Text></> : <Text accessibilityRole="link" onPress={() => changeMode('login')} style={styles.link}>Quay lại đăng nhập</Text>}
           </View>
-          <Text style={styles.demoNote}>Chế độ trình diễn: mã xác minh là 123456. Tài khoản chỉ được lưu trên thiết bị này.</Text>
+          <Text style={styles.demoNote}>Tài khoản được lưu trên máy chủ CookFlow. Mã xác minh gồm 6 chữ số, hiệu lực 10 phút.</Text>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

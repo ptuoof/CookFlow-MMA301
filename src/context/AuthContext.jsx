@@ -1,198 +1,188 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { Platform } from 'react-native';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import * as authApi from '../services/api/auth';
+import * as usersApi from '../services/api/users';
+import { setAuthToken, setSessionEndHandler } from '../services/api/client';
+import { clearToken, loadToken, saveToken } from '../services/api/session';
+import { showAlert } from '../utils/dialog';
 
-const STORAGE_KEY = '@cookflow_mock_auth_v1';
-const PASSWORD_KEY = email => `cookflow_password_${Array.from(email).map(char => char.codePointAt(0).toString(16)).join('_')}`;
-const ADMIN_EMAIL = 'admin@cookflow.demo';
-const ADMIN_PASSWORD = 'Admin123!';
+// Accounts live on the CookFlow API (JWT). The token is kept in SecureStore (web: localStorage)
+// so the user stays signed in between launches.
 const AuthContext = createContext(null);
 
-const storage = {
-  get: async () => {
-    try {
-      if (Platform.OS === 'web') return window.localStorage.getItem(STORAGE_KEY);
-      return await require('@react-native-async-storage/async-storage').default.getItem(STORAGE_KEY);
-    } catch { return null; }
-  },
-  set: async value => {
-    try {
-      if (Platform.OS === 'web') window.localStorage.setItem(STORAGE_KEY, value);
-      else await require('@react-native-async-storage/async-storage').default.setItem(STORAGE_KEY, value);
-    } catch { /* Demo can continue for the current session if storage is unavailable. */ }
-  },
-  getPassword: async email => Platform.OS === 'web' ? window.localStorage.getItem(PASSWORD_KEY(email)) : require('expo-secure-store').getItemAsync(PASSWORD_KEY(email)),
-  setPassword: async (email, password) => Platform.OS === 'web' ? window.localStorage.setItem(PASSWORD_KEY(email), password) : require('expo-secure-store').setItemAsync(PASSWORD_KEY(email), password)
-};
+// The app's user shape: { id, email, name, role, verified, locked, avatar, createdAt }
+const toUser = user => user ? { ...user, name: user.name || user.fullName || user.email } : null;
 
 export function AuthProvider({ children }) {
-  const [account, setAccount] = useState(null);
+  const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
+  // Email waiting for its 6-digit code (after register, or a login of an unverified account)
+  const [pendingEmail, setPendingEmail] = useState(null);
+  // Code returned by the server in development (no mail server yet)
+  const [devCode, setDevCode] = useState(null);
+  // Startup problem (server unreachable) shown on the sign-in screen
+  const [connectionError, setConnectionError] = useState('');
+  // Admin: user list
+  const [users, setUsers] = useState([]);
+  const userRef = useRef(null);
+  userRef.current = user;
 
+  const startSession = useCallback(async (token, nextUser) => {
+    setAuthToken(token);
+    await saveToken(token);
+    setPendingEmail(null);
+    setDevCode(null);
+    setConnectionError('');
+    setUser(toUser(nextUser));
+  }, []);
+
+  const endSession = useCallback(async () => {
+    setAuthToken(null);
+    await clearToken();
+    setUser(null);
+    setUsers([]);
+  }, []);
+
+  // Restore the previous session
   useEffect(() => {
     let alive = true;
-    storage.get().then(async raw => {
-      if (!alive) return;
-      try {
-        const saved = JSON.parse(raw || 'null');
-        if (saved?.users) {
-          const users = { ...saved.users };
-          await Promise.all(Object.entries(users).map(async ([email, user]) => {
-            if (user.password != null) {
-              await storage.setPassword(email, user.password);
-              users[email] = { ...user };
-              delete users[email].password;
-            }
-          }));
-          const safeSaved = { ...saved, users };
-          setAccount(safeSaved);
-          if (JSON.stringify(safeSaved) !== JSON.stringify(saved)) await storage.set(JSON.stringify(safeSaved));
+    (async () => {
+      const token = await loadToken();
+      if (token) {
+        setAuthToken(token);
+        try {
+          const me = await authApi.fetchMe();
+          if (alive) setUser(toUser(me.user));
+        } catch (error) {
+          if (!alive) return;
+          if (error.code === 'NETWORK_ERROR') {
+            // Keep the token: the next launch (or sign-in) may reach the server
+            setConnectionError(error.message);
+          } else {
+            setAuthToken(null);
+            await clearToken();
+          }
         }
-      } catch { /* Ignore invalid demo data. */ }
-      setReady(true);
-    });
+      }
+      if (alive) setReady(true);
+    })();
     return () => { alive = false; };
   }, []);
 
-  const persist = useCallback(async next => {
-    const users = { ...(next.users || {}) };
-    await Promise.all(Object.entries(users).map(async ([email, user]) => {
-      if (user.password != null) {
-        await storage.setPassword(email, user.password);
-        users[email] = { ...user };
-        delete users[email].password;
-      }
-    }));
-    const safeNext = { ...next, users };
-    setAccount(safeNext);
-    await storage.set(JSON.stringify(safeNext));
-  }, []);
+  // Token expired / account locked or deleted while the app is open -> back to the sign-in screen
+  useEffect(() => {
+    setSessionEndHandler(({ code, message }) => {
+      if (!userRef.current) return;
+      endSession();
+      if (code === 'ACCOUNT_LOCKED') showAlert('Tài khoản đã bị khóa', message);
+      else showAlert('Phiên đăng nhập đã kết thúc', message || 'Hãy đăng nhập lại.');
+    });
+    return () => setSessionEndHandler(null);
+  }, [endSession]);
 
   const register = useCallback(async ({ name, email, password }) => {
-    const normalizedEmail = email.trim().toLowerCase();
-    const users = account?.users || {};
-    if (users[normalizedEmail]) throw new Error('Email này đã được đăng ký. Hãy đăng nhập.');
-    const nextUsers = { ...users, [normalizedEmail]: { name: name.trim(), password, verified: false, role: 'user', createdAt: Date.now() } };
-    await persist({ users: nextUsers, pendingEmail: normalizedEmail, currentUser: null });
-    return normalizedEmail;
-  }, [account, persist]);
+    const data = await authApi.register({ name: name.trim(), email: email.trim().toLowerCase(), password });
+    setPendingEmail(data.email);
+    setDevCode(data.devCode || null);
+    return data.email;
+  }, []);
 
-  const verify = useCallback(async email => {
-    const users = { ...(account?.users || {}) };
-    if (!users[email]) throw new Error('Không tìm thấy tài khoản cần xác minh.');
-    users[email] = { ...users[email], verified: true };
-    await persist({ users, pendingEmail: null, currentUser: { email, name: users[email].name, role: users[email].role || 'user' } });
-  }, [account, persist]);
+  /** Verifies the email with the 6-digit code; signs the user in. */
+  const verify = useCallback(async (email, code) => {
+    const data = await authApi.verifyEmail(email.trim().toLowerCase(), code.trim());
+    await startSession(data.token, data.user);
+  }, [startSession]);
+
+  const resendCode = useCallback(async email => {
+    const data = await authApi.resendCode(email.trim().toLowerCase());
+    setDevCode(data.devCode || null);
+    return data.devCode || null;
+  }, []);
 
   const login = useCallback(async (email, password) => {
-    const normalizedEmail = email.trim().toLowerCase();
-    if (normalizedEmail === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
-      const admin = { name: 'Quản trị viên', verified: true, role: 'admin' };
-      await persist({ ...(account || {}), users: { ...(account?.users || {}), [ADMIN_EMAIL]: admin }, currentUser: { email: ADMIN_EMAIL, ...admin }, pendingEmail: null });
-      return;
+    try {
+      const data = await authApi.login(email.trim().toLowerCase(), password);
+      await startSession(data.token, data.user);
+    } catch (error) {
+      if (error.code === 'EMAIL_NOT_VERIFIED') {
+        // The server sent a fresh code: the sign-in screen switches to "Xác minh email"
+        setPendingEmail(error.data?.email || email.trim().toLowerCase());
+        setDevCode(error.data?.devCode || null);
+      }
+      throw error;
     }
-    const user = account?.users?.[normalizedEmail];
-    const savedPassword = user ? await storage.getPassword(normalizedEmail) : null;
-    if (!user || savedPassword !== password) throw new Error('Email hoặc mật khẩu chưa chính xác.');
-    if (user.locked) throw new Error('Tài khoản đã bị khóa. Liên hệ quản trị viên CookFlow.');
-    if (!user.verified) {
-      await persist({ ...account, pendingEmail: normalizedEmail, currentUser: null });
-      throw new Error('Tài khoản chưa xác minh. Mã demo: 123456.');
-    }
-    await persist({ ...account, currentUser: { email: normalizedEmail, name: user.name, role: user.role || 'user' }, pendingEmail: null });
-  }, [account, persist]);
+  }, [startSession]);
 
-  const resetPassword = useCallback(async (email, password) => {
-    const normalizedEmail = email.trim().toLowerCase();
-    const users = { ...(account?.users || {}) };
-    if (!users[normalizedEmail]) throw new Error('Không tìm thấy tài khoản với email này.');
-    users[normalizedEmail] = { ...users[normalizedEmail], password };
-    await persist({ ...account, users, pendingEmail: null });
-  }, [account, persist]);
+  /** Step 1 of "Quên mật khẩu": sends a reset code. */
+  const requestPasswordReset = useCallback(async email => {
+    const data = await authApi.forgotPassword(email.trim().toLowerCase());
+    setDevCode(data.devCode || null);
+    return data.devCode || null;
+  }, []);
+
+  /** Step 2: new password with the code. */
+  const resetPassword = useCallback(async (email, code, password) => {
+    await authApi.resetPassword(email.trim().toLowerCase(), code.trim(), password);
+    setDevCode(null);
+  }, []);
 
   const signInWithGoogle = useCallback(async () => {
-    const email = 'chef@cookflow.demo';
-    const existing = account?.users?.[email];
-    if (existing?.locked) throw new Error('Tài khoản đã bị khóa. Liên hệ quản trị viên CookFlow.');
-    const users = { ...(account?.users || {}), [email]: { createdAt: Date.now(), ...existing, name: existing?.name || 'Đầu bếp CookFlow', verified: true, role: existing?.role || 'user' } };
-    await persist({ ...account, users, pendingEmail: null, currentUser: { email, name: users[email].name, role: users[email].role } });
-  }, [account, persist]);
+    throw new Error('Đăng nhập bằng Google chưa được hỗ trợ trên máy chủ CookFlow.');
+  }, []);
+
+  const cancelVerification = useCallback(() => {
+    setPendingEmail(null);
+    setDevCode(null);
+  }, []);
 
   // ---------- Profile (signed-in user) ----------
   const updateProfile = useCallback(async ({ name }) => {
-    const current = account?.currentUser;
     const cleanName = String(name ?? '').trim();
-    if (!current) throw new Error('Bạn chưa đăng nhập.');
     if (cleanName.length < 2) throw new Error('Tên hiển thị cần ít nhất 2 ký tự.');
     if (cleanName.length > 40) throw new Error('Tên hiển thị tối đa 40 ký tự.');
-    const users = { ...(account.users || {}) };
-    users[current.email] = { ...(users[current.email] || {}), name: cleanName };
-    await persist({ ...account, users, currentUser: { ...current, name: cleanName } });
-  }, [account, persist]);
+    setUser(toUser(await authApi.updateProfile({ name: cleanName })));
+  }, []);
 
   const changePassword = useCallback(async (oldPassword, newPassword) => {
-    const email = account?.currentUser?.email;
-    if (!email) throw new Error('Bạn chưa đăng nhập.');
-    if (email === ADMIN_EMAIL) throw new Error('Mật khẩu tài khoản quản trị demo không thể đổi.');
-    const saved = await storage.getPassword(email);
-    if (saved != null && saved !== oldPassword) throw new Error('Mật khẩu hiện tại chưa đúng.');
     if (String(newPassword || '').length < 8) throw new Error('Mật khẩu mới cần ít nhất 8 ký tự.');
-    await storage.setPassword(email, newPassword);
-  }, [account]);
+    await authApi.changePassword(oldPassword, newPassword);
+  }, []);
 
   // ---------- Admin: user management ----------
-  const listUsers = useCallback(() => Object.entries(account?.users || {}).map(([email, user]) => ({
-    email, name: user.name || email, role: user.role || 'user', verified: !!user.verified, locked: !!user.locked, createdAt: user.createdAt || null
-  })).sort((a, b) => (a.role === b.role ? a.email.localeCompare(b.email) : a.role === 'admin' ? -1 : 1)), [account]);
+  const refreshUsers = useCallback(async () => {
+    const data = await usersApi.fetchUsers();
+    setUsers(data.users.map(toUser));
+    return data.users;
+  }, []);
 
-  /** Creates (no `originalEmail`) or edits a user. Admin cannot demote / lock themselves. */
-  const adminSaveUser = useCallback(async ({ originalEmail, email, name, role, verified, locked, password }) => {
-    const users = { ...(account?.users || {}) };
-    const normalizedEmail = String(email ?? '').trim().toLowerCase();
-    const cleanName = String(name ?? '').trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) throw new Error('Email không hợp lệ.');
-    if (cleanName.length < 2) throw new Error('Tên cần ít nhất 2 ký tự.');
-    const isSelf = originalEmail && originalEmail === account?.currentUser?.email;
-    if (isSelf && (role !== 'admin' || locked)) throw new Error('Không thể tự hạ quyền hoặc khóa tài khoản đang đăng nhập.');
-    if (originalEmail && originalEmail !== normalizedEmail) {
-      if (isSelf || originalEmail === ADMIN_EMAIL) throw new Error('Không đổi email của tài khoản quản trị.');
-      if (users[normalizedEmail]) throw new Error('Email mới đã được dùng bởi tài khoản khác.');
-      const moved = await storage.getPassword(originalEmail);
-      if (moved != null) await storage.setPassword(normalizedEmail, moved);
-      delete users[originalEmail];
-    } else if (!originalEmail && users[normalizedEmail]) {
-      throw new Error('Email này đã có tài khoản.');
-    }
-    if (!originalEmail && String(password || '').length < 8) throw new Error('Mật khẩu ban đầu cần ít nhất 8 ký tự.');
-    const previous = users[originalEmail || normalizedEmail] || users[normalizedEmail] || {};
-    users[normalizedEmail] = {
-      ...previous,
-      name: cleanName,
-      role: role === 'admin' ? 'admin' : 'user',
-      verified: !!verified,
-      locked: !!locked,
-      createdAt: previous.createdAt || Date.now(),
-      ...(password ? { password } : {})
-    };
-    await persist({ ...account, users });
-  }, [account, persist]);
+  useEffect(() => {
+    if (user?.role === 'admin') refreshUsers().catch(error => showAlert('Không tải được danh sách tài khoản', error.message));
+  }, [user?.id, user?.role, refreshUsers]);
 
-  const adminDeleteUser = useCallback(async email => {
-    if (email === account?.currentUser?.email) throw new Error('Không thể xóa tài khoản đang đăng nhập.');
-    if (email === ADMIN_EMAIL) throw new Error('Không thể xóa tài khoản quản trị mặc định.');
-    const users = { ...(account?.users || {}) };
-    delete users[email];
-    await persist({ ...account, users, pendingEmail: account?.pendingEmail === email ? null : account?.pendingEmail });
-  }, [account, persist]);
+  /** Same list as before, now loaded from the server (refreshUsers) */
+  const listUsers = useCallback(() => users, [users]);
+
+  /** Creates (no `id`) or edits a user. */
+  const adminSaveUser = useCallback(async form => {
+    if (!form.id && String(form.password || '').length < 8) throw new Error('Mật khẩu ban đầu cần ít nhất 8 ký tự.');
+    await usersApi.saveUser(form);
+    await refreshUsers();
+  }, [refreshUsers]);
+
+  const adminDeleteUser = useCallback(async id => {
+    await usersApi.deleteUser(id);
+    await refreshUsers();
+  }, [refreshUsers]);
 
   const signOut = useCallback(async () => {
-    if (account) await persist({ ...account, currentUser: null, pendingEmail: null });
-  }, [account, persist]);
+    await endSession();
+  }, [endSession]);
 
   const value = useMemo(() => ({
-    ready, user: account?.currentUser || null, pendingEmail: account?.pendingEmail || null,
-    register, verify, login, resetPassword, signInWithGoogle, signOut,
-    updateProfile, changePassword, listUsers, adminSaveUser, adminDeleteUser
-  }), [ready, account, register, verify, login, resetPassword, signInWithGoogle, signOut, updateProfile, changePassword, listUsers, adminSaveUser, adminDeleteUser]);
+    ready, user, pendingEmail, devCode, connectionError,
+    register, verify, resendCode, login, requestPasswordReset, resetPassword, signInWithGoogle, cancelVerification, signOut,
+    updateProfile, changePassword, users, listUsers, refreshUsers, adminSaveUser, adminDeleteUser
+  }), [ready, user, pendingEmail, devCode, connectionError, register, verify, resendCode, login, requestPasswordReset, resetPassword,
+    signInWithGoogle, cancelVerification, signOut, updateProfile, changePassword, users, listUsers, refreshUsers, adminSaveUser, adminDeleteUser]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

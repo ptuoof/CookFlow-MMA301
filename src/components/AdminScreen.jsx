@@ -20,7 +20,7 @@ const TABS = [
   { id: 'requests', label: 'Yêu cầu' }
 ];
 
-/** Admin console: real data from this device's CookFlow storage, with CRUD on every catalog. */
+/** Admin console: data from the CookFlow API, with CRUD on every catalog. */
 export function AdminScreen() {
   const { user, signOut } = useAuth();
   const { recipeRequests } = useRecipes();
@@ -89,7 +89,7 @@ function OverviewTab({ onOpen }) {
           <View style={styles.noticeDot} />
           <Text style={styles.noticeText}>{missingKcal} công thức chưa có thông số kcal — chạm để cập nhật.</Text>
         </Pressable> : null}
-      <Text style={styles.footer}>Dữ liệu demo lưu cục bộ trên thiết bị (chưa có máy chủ).</Text>
+      <Text style={styles.footer}>Dữ liệu từ máy chủ CookFlow.</Text>
     </ScrollView>;
 }
 
@@ -204,7 +204,7 @@ function RecipesTab() {
 }
 
 // ---------------------------------------------------------------- Users
-const EMPTY_USER = { originalEmail: null, email: '', name: '', role: 'user', verified: true, locked: false, password: '' };
+const EMPTY_USER = { id: null, email: '', name: '', role: 'user', verified: true, locked: false, password: '' };
 function UsersTab() {
   const { user: me, listUsers, adminSaveUser, adminDeleteUser } = useAuth();
   const [query, setQuery] = useState('');
@@ -220,17 +220,17 @@ function UsersTab() {
   };
   const toggleLock = async u => {
     try {
-      await adminSaveUser({ ...u, originalEmail: u.email, locked: !u.locked });
+      await adminSaveUser({ ...u, locked: !u.locked });
     } catch (e) {
       showAlert('Không thực hiện được', e.message);
     }
   };
   const remove = u => confirmAction({
     title: `Xóa tài khoản ${u.email}?`,
-    message: 'Người dùng sẽ không đăng nhập được nữa. Dữ liệu nấu ăn trên máy vẫn giữ nguyên.',
+    message: 'Người dùng sẽ không đăng nhập được nữa. Công thức cá nhân, danh sách đi chợ, lịch sử và kế hoạch của tài khoản này cũng bị xóa.',
     confirmText: 'Xóa',
     destructive: true,
-    onConfirm: () => adminDeleteUser(u.email).catch(e => showAlert('Không xóa được', e.message))
+    onConfirm: () => adminDeleteUser(u.id).catch(e => showAlert('Không xóa được', e.message))
   });
   return <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <View style={styles.addRow}>
@@ -238,7 +238,7 @@ function UsersTab() {
         <AppleButton title="+ Thêm" onPress={() => setForm({ ...EMPTY_USER })} />
       </View>
       <View style={styles.listCard}>
-        {users.map((u, index) => <View key={u.email} style={[styles.row, index > 0 && styles.separator]}>
+        {users.map((u, index) => <View key={u.id} style={[styles.row, index > 0 && styles.separator]}>
             <View style={[styles.avatar, u.role === 'admin' && { backgroundColor: C.primary }]}><Text style={[styles.avatarText, u.role === 'admin' && { color: '#FFFFFF' }]}>{u.name[0]?.toUpperCase()}</Text></View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle} numberOfLines={1}>{u.name}{u.email === me?.email ? ' (bạn)' : ''}</Text>
@@ -250,7 +250,7 @@ function UsersTab() {
               </View>
             </View>
             <View style={styles.rowActions}>
-              <Pressable hitSlop={6} onPress={() => setForm({ ...u, originalEmail: u.email, password: '' })}><Text style={styles.link}>Sửa</Text></Pressable>
+              <Pressable hitSlop={6} onPress={() => setForm({ ...u, password: '' })}><Text style={styles.link}>Sửa</Text></Pressable>
               {u.email !== me?.email ? <Pressable hitSlop={6} onPress={() => toggleLock(u)}><Text style={styles.link}>{u.locked ? 'Mở khóa' : 'Khóa'}</Text></Pressable> : null}
               {u.email !== me?.email ? <Pressable hitSlop={6} onPress={() => remove(u)}><Text style={styles.linkDanger}>Xóa</Text></Pressable> : null}
             </View>
@@ -261,12 +261,12 @@ function UsersTab() {
       <Modal visible={!!form} transparent animationType="fade" onRequestClose={() => setForm(null)}>
         <View style={styles.backdrop}>
           <ScrollView contentContainerStyle={styles.sheet} keyboardShouldPersistTaps="handled">
-            <Text style={styles.sheetTitle}>{form?.originalEmail ? 'Sửa tài khoản' : 'Thêm tài khoản'}</Text>
+            <Text style={styles.sheetTitle}>{form?.id ? 'Sửa tài khoản' : 'Thêm tài khoản'}</Text>
             <Text style={styles.label}>Tên hiển thị</Text>
             <TextInput style={styles.input} value={form?.name} onChangeText={name => setForm(f => ({ ...f, name }))} />
             <Text style={styles.label}>Email</Text>
             <TextInput style={styles.input} value={form?.email} autoCapitalize="none" keyboardType="email-address" onChangeText={email => setForm(f => ({ ...f, email }))} />
-            <Text style={styles.label}>{form?.originalEmail ? 'Đặt lại mật khẩu (để trống nếu giữ nguyên)' : 'Mật khẩu ban đầu (≥ 8 ký tự)'}</Text>
+            <Text style={styles.label}>{form?.id ? 'Đặt lại mật khẩu (để trống nếu giữ nguyên)' : 'Mật khẩu ban đầu (≥ 8 ký tự)'}</Text>
             <TextInput style={styles.input} value={form?.password} secureTextEntry onChangeText={password => setForm(f => ({ ...f, password }))} />
             <Text style={styles.label}>Vai trò</Text>
             <View style={styles.pillRow}>
