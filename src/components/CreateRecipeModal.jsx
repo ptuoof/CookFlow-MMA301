@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, TextInput, Pressable, KeyboardAvoidingView, Platform, Image } from 'react-native';
+import { Modal, View, Text, StyleSheet, ScrollView, TextInput, Pressable, KeyboardAvoidingView, Platform, Image, Switch } from 'react-native';
 import { confirmAction, showAlert } from '../utils/dialog';
 import { parseIntInRange } from '../utils/quantity';
 import { normalizeVi } from '../utils/text';
 import { DEFAULT_RECIPE_IMAGE, makeId } from '../utils/recipeModel';
-import { persistMedia } from '../utils/media';
+import { uploadMedia } from '../services/api/upload';
 import { MINUTES_MAX, SERVINGS_MAX, SERVINGS_MIN, TIMER_MINUTES_MAX } from '../constants/limits';
 import { estimateCalories, KCAL_MAX, MACRO_MAX, caloriesFromMacros } from '../utils/nutrition';
 import { DIET_TAGS, detectAllergens } from '../utils/dietary';
@@ -29,6 +29,7 @@ const toFormState = recipe => recipe ? {
   servings: recipe.servings.toString(),
   difficulty: recipe.difficulty,
   tags: recipe.tags || [],
+  isPublic: !!recipe.isPublic,
   calories: recipe.calories ? String(recipe.calories) : '',
   protein: recipe.nutrition?.protein != null ? String(recipe.nutrition.protein) : '',
   carbs: recipe.nutrition?.carbs != null ? String(recipe.nutrition.carbs) : '',
@@ -54,6 +55,7 @@ const toFormState = recipe => recipe ? {
   servings: '2',
   difficulty: 'Dễ',
   tags: [],
+  isPublic: false,
   calories: '',
   protein: '',
   carbs: '',
@@ -65,7 +67,7 @@ const toFormState = recipe => recipe ? {
 // Comparable text of everything the user can change; ids and UI-only flags are ignored
 const snapshotOf = form => JSON.stringify([
   form.title, form.description, form.imageUrl, form.videoUrl, form.category,
-  form.prepTime, form.cookTime, form.servings, form.difficulty, [...(form.tags || [])].sort(),
+  form.prepTime, form.cookTime, form.servings, form.difficulty, [...(form.tags || [])].sort(), !!form.isPublic,
   form.calories, form.protein, form.carbs, form.fat,
   form.ingredients.map(i => [i.name, i.amount, i.unit].map(v => String(v ?? '').trim())),
   form.steps.map(s => [s.title, s.instruction, s.timerMinutes, s.tip, s.image, s.videoUrl].map(v => String(v ?? '').trim()))
@@ -101,6 +103,8 @@ export const CreateRecipeModal = ({
   const [servings, setServings] = useState('2');
   const [difficulty, setDifficulty] = useState('Dễ');
   const [tags, setTags] = useState([]);
+  // Personal recipes are private unless the owner shares them with every user
+  const [isPublic, setIsPublic] = useState(false);
   // Nutrition per serving (text while typing)
   const [calories, setCalories] = useState('');
   const [protein, setProtein] = useState('');
@@ -132,6 +136,7 @@ export const CreateRecipeModal = ({
     setServings(form.servings);
     setDifficulty(form.difficulty);
     setTags(form.tags || []);
+    setIsPublic(!!form.isPublic);
     setCalories(form.calories || '');
     setProtein(form.protein || '');
     setCarbs(form.carbs || '');
@@ -143,7 +148,7 @@ export const CreateRecipeModal = ({
   useEffect(() => {
     if (editingRecipe) applyFormState(toFormState(editingRecipe));
     // A copy starts from the template's values; nothing is saved until the user taps Lưu
-    else if (templateRecipe) applyFormState({ ...toFormState(templateRecipe), title: `${templateRecipe.title}${COPY_SUFFIX}` });
+    else if (templateRecipe) applyFormState({ ...toFormState(templateRecipe), title: `${templateRecipe.title}${COPY_SUFFIX}`, isPublic: false });
     else applyFormState({ ...toFormState(null), title: prefillTitle || '' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingRecipe, templateRecipe, visible, prefillTitle]);
@@ -348,12 +353,19 @@ export const CreateRecipeModal = ({
       return;
     }
     setIsSaving(true);
-    // Album picks live in a purgeable cache: copy them next to the app data before saving
-    const [finalImageUrl, finalVideoUrl, ...stepMedia] = await Promise.all([
-      persistMedia(imageUrl.trim() || DEFAULT_RECIPE_IMAGE),
-      persistMedia(videoUrl.trim() || undefined),
-      ...validSteps.flatMap(s => [persistMedia(s.image), persistMedia(s.videoUrl)])
-    ]);
+    // Album picks only exist on this phone: upload them so every device can show them
+    let finalImageUrl, finalVideoUrl, stepMedia;
+    try {
+      [finalImageUrl, finalVideoUrl, ...stepMedia] = await Promise.all([
+        uploadMedia(imageUrl.trim() || DEFAULT_RECIPE_IMAGE, 'image'),
+        uploadMedia(videoUrl.trim() || undefined, 'video'),
+        ...validSteps.flatMap(s => [uploadMedia(s.image, 'image'), uploadMedia(s.videoUrl, 'video')])
+      ]);
+    } catch (e) {
+      setIsSaving(false);
+      showAlert('Chưa tải được ảnh / video lên', e?.message || 'Vui lòng thử lại.');
+      return;
+    }
     setIsSaving(false);
     validSteps.forEach((s, idx) => {
       s.image = stepMedia[idx * 2];
@@ -373,24 +385,33 @@ export const CreateRecipeModal = ({
       calories: kcal ?? caloriesFromMacros(macros),
       nutrition: macros,
       ingredients: validIngredients,
-      steps: validSteps
+      steps: validSteps,
+      // The admin catalog form never changes who can see a recipe
+      ...(asCatalog ? {} : { isPublic })
     };
-    const commit = () => {
+    const shareNote = !asCatalog && isPublic ? ' Món được chia sẻ công khai cho mọi người dùng.' : '';
+    const commit = async () => {
+      setIsSaving(true);
+      let saved;
+      let message;
       if (editingRecipe) {
-        updateRecipe({ ...editingRecipe, ...payload });
-        showAlert('Thành công! 🎉', asCatalog ? 'Đã cập nhật công thức.' : 'Công thức của bạn đã được cập nhật.');
+        saved = await updateRecipe({ ...editingRecipe, ...payload });
+        message = ['Thành công! 🎉', (asCatalog ? 'Đã cập nhật công thức.' : 'Công thức của bạn đã được cập nhật.') + shareNote];
       } else if (templateRecipe) {
         // Keep fields the form does not edit (calories, accent color); the copy stands on its own
         const { id, isCustom, createdAt, updatedAt, variantOf, aiChanges, copiedFrom, ...rest } = templateRecipe;
-        addRecipe({ ...rest, ...payload, copiedFrom: id, colorAccent: rest.colorAccent || HeronColors.brand });
-        showAlert('Đã tạo bản sao 🎉', `"${payload.title}" đã được lưu vào mục "Hồ sơ → Món của tôi → Tự tạo". Công thức gốc giữ nguyên.`);
+        saved = await addRecipe({ ...rest, ...payload, copiedFrom: id, colorAccent: rest.colorAccent || HeronColors.brand }, { isPublic });
+        message = ['Đã tạo bản sao 🎉', `"${payload.title}" đã được lưu vào mục "Hồ sơ → Món của tôi → Tự tạo". Công thức gốc giữ nguyên.${shareNote}`];
       } else if (asCatalog) {
-        addRecipe({ ...payload, colorAccent: HeronColors.brand }, { system: true });
-        showAlert('Đã thêm vào kho công thức 🎉', `"${payload.title}" đã hiển thị cho mọi người dùng ở trang Khám phá.`);
+        saved = await addRecipe({ ...payload, colorAccent: HeronColors.brand }, { system: true });
+        message = ['Đã thêm vào kho công thức 🎉', `"${payload.title}" đã hiển thị cho mọi người dùng ở trang Khám phá.`];
       } else {
-        addRecipe({ ...payload, colorAccent: HeronColors.brand });
-        showAlert('Thành công! 🎉', 'Món mới đã được lưu vào mục "Hồ sơ → Món của tôi → Tự tạo".');
+        saved = await addRecipe({ ...payload, colorAccent: HeronColors.brand }, { isPublic });
+        message = ['Thành công! 🎉', `Món mới đã được lưu vào mục "Hồ sơ → Món của tôi → Tự tạo".${shareNote}`];
       }
+      setIsSaving(false);
+      if (!saved) return; // the error was shown; the form keeps what the user typed
+      showAlert(...message);
       resetForm();
       onClose();
     };
@@ -411,7 +432,7 @@ export const CreateRecipeModal = ({
   const handleRequestClose = () => {
     // Any edited field counts (amounts, timers, tips, media...), not only the title or row count
     const isDirty = snapshotOf({
-      title, description, imageUrl, videoUrl, category, prepTime, cookTime, servings, difficulty, tags, calories, protein, carbs, fat, ingredients, steps
+      title, description, imageUrl, videoUrl, category, prepTime, cookTime, servings, difficulty, tags, isPublic, calories, protein, carbs, fat, ingredients, steps
     }) !== initialSnapshotRef.current;
     if (!isDirty) return onClose();
     return confirmAction({
@@ -677,6 +698,14 @@ export const CreateRecipeModal = ({
               {detectedAllergens.length ? <Text style={styles.allergenHint}>
                   ⚠ Tự nhận diện từ nguyên liệu — có thể chứa: {detectedAllergens.map(a => a.label).join(', ')}
                 </Text> : null}
+
+              {!asCatalog ? <View style={styles.publicRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.label}>Chia sẻ công khai</Text>
+                    <Text style={styles.publicHint}>{isPublic ? 'Mọi người dùng CookFlow xem được món này (chỉ bạn sửa được).' : 'Chỉ mình bạn xem được món này.'}</Text>
+                  </View>
+                  <Switch accessibilityLabel="Chia sẻ công khai" value={isPublic} onValueChange={setIsPublic} trackColor={{ true: HeronColors.brand }} />
+                </View> : null}
             </View>
 
             {/* Card 3: Danh sách nguyên liệu */}
@@ -1211,6 +1240,18 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     rowGap: 8,
     marginVertical: 6
+  },
+  publicRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 14
+  },
+  publicHint: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: HeronColors.granite,
+    marginTop: -4
   },
   allergenHint: {
     marginTop: 6,
