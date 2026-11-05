@@ -51,7 +51,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test:logic": "node --import ./scripts/test-loader.mjs --test scripts/logic.test.mjs"
+    "test:logic": "node --import ./scripts/test-loader.mjs --test scripts/logic.test.mjs",
+    "test:api": "node scripts/api-contract.test.mjs"
   },
   "private": true
 }

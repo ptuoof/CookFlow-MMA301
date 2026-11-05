@@ -7,14 +7,23 @@ skinparam linetype ortho
 skinparam shadowing false
 
 actor "Người dùng" as User
+actor "Quản trị viên" as Admin
 
 rectangle "CookFlow Architecture" {
-  package "CookFlow Frontend" {
+  package "CookFlow Frontend (MMA301)" {
     component "Ứng dụng CookFlow\nReact Native + Expo" as App
+    component "services/api\n(fetch + JWT)" as ApiClient
   }
 
   package "Thiết bị người dùng" {
-    database "Lưu trữ cục bộ\nAsyncStorage / localStorage" as Storage
+    database "SecureStore / localStorage\n(token)" as Secure
+    database "AsyncStorage / localStorage\n(timer, phiên nấu, khóa Gemini)" as Storage
+  }
+
+  package "CookFlow Backend (SDN302)" {
+    component "REST API\nNode.js + Express\nJWT, RBAC, Multer" as Api
+    database "MongoDB\n(Mongoose)" as Mongo
+    folder "public/uploads\n(ảnh, video)" as Uploads
   }
 
   package "Third Party" {
@@ -23,12 +32,19 @@ rectangle "CookFlow Architecture" {
 }
 
 User --> App : thao tác
-App <--> Storage : đọc / ghi dữ liệu
+Admin --> App : màn hình quản trị
+App --> ApiClient
+ApiClient <--> Api : HTTPS / JSON\nAuthorization: Bearer
+Api <--> Mongo : đọc / ghi
+Api --> Uploads : lưu tệp
+App <--> Secure : token đăng nhập
+App <--> Storage : dữ liệu chỉ trên máy
 App <--> Gemini : HTTPS request / response
 
-note bottom of App
-  Công thức, yêu thích, kho nguyên liệu,
-  mua sắm, cài đặt và lịch sử nấu.
+note bottom of Api
+  Tài khoản, công thức (system / admin / personal),
+  danh mục, yêu thích, đi chợ, tủ lạnh, cài đặt,
+  lịch sử nấu, kế hoạch bữa ăn, yêu cầu / báo cáo.
 end note
 
 @enduml

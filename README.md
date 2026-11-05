@@ -43,14 +43,45 @@
 cd CookFlow
 ```
 
-### Bước 2: Khởi động máy ảo Android
+### Bước 2: Chạy máy chủ API (repo backend `SDN302/CookFlow`)
+Dữ liệu (tài khoản, công thức, danh mục, đi chợ, tủ lạnh, lịch sử, kế hoạch bữa ăn, yêu cầu) nằm trên máy chủ.
+```bash
+cd ../../SDN302/Project/CookFlow   # thư mục repo backend
+npm install
+cp .env.example .env               # đổi JWT_SECRET
+npm run seed                       # tài khoản demo + 5 danh mục + 6 món mẫu
+npm run dev                        # http://0.0.0.0:9999
+```
+
+### Bước 3: Cấu hình địa chỉ API cho app (tùy chọn)
+`cp .env.example .env` rồi đặt `EXPO_PUBLIC_API_URL`. Để trống thì dùng mặc định:
+* Android Emulator: `http://10.0.2.2:9999`
+* iOS Simulator / web: `http://localhost:9999`
+* Điện thoại thật cùng Wi-Fi: IP LAN của máy tính, ví dụ `http://192.168.1.10:9999`
+
+### Bước 4: Khởi động máy ảo Android
 * Bật máy ảo Android (Pixel 6/7/8 qua Android Studio hoặc Visual Studio).
 
-### Bước 3: Chạy ứng dụng
+### Bước 5: Chạy ứng dụng
 ```bash
 npm run android
 ```
 *(Hoặc gõ `npx expo start` rồi nhấn phím `a` để mở trên Android Emulator).*
+
+### Tài khoản demo (do `npm run seed` tạo)
+| Vai trò | Email | Mật khẩu |
+| :--- | :--- | :--- |
+| Quản trị | `admin@cookflow.demo` | `Admin123!` |
+| Người dùng | `chef@cookflow.demo` | `Chef123!` |
+
+Tài khoản mới phải xác minh email bằng mã 6 chữ số. Khi chưa cấu hình máy chủ mail, mã hiện trong console của backend
+và ngay trên màn hình xác minh (chỉ ở môi trường phát triển).
+
+### Kiểm thử
+```bash
+npm run test:logic                                            # logic thuần (không cần máy chủ)
+COOKFLOW_BACKEND_DIR=../../SDN302/Project/CookFlow npm run test:api   # gọi API thật (MongoDB in-memory)
+```
 
 ---
 
@@ -76,9 +107,12 @@ CookFlow/
 │   ├── constants/
 │   │   └── theme.js              # Bảng màu AppleColors, Radius, AppleShadow
 │   ├── context/
-│   │   └── RecipeContext.jsx     # Quản lý State toàn cục & lưu trữ AsyncStorage
+│   │   ├── AuthContext.jsx       # Đăng nhập / xác minh email / quản lý tài khoản qua API (JWT)
+│   │   └── RecipeContext.jsx     # State toàn cục, đồng bộ dữ liệu với API; timer & phiên nấu lưu trên máy
+│   ├── services/
+│   │   └── api/                  # Client REST API (client.js) + mỗi tài nguyên một module
 │   ├── data/
-│   │   └── mockRecipes.js        # Dữ liệu 6 món ăn mẫu với các bước hẹn giờ
+│   │   └── mockRecipes.js        # 6 món mẫu (nguồn của seed backend, dùng trong test logic)
 │   └── types/
 │       └── recipe.js             # Danh mục và hằng số hỗ trợ
 ├── package.json
