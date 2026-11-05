@@ -26,7 +26,8 @@ export const MyRecipesView = ({
   } = useRecipes();
   const [activeTab, setActiveTab] = useState('favorites');
   const favoriteRecipes = recipes.filter(r => favoriteIds.includes(r.id));
-  const customRecipes = recipes.filter(r => r.isCustom);
+  // Own recipes only (shared recipes of other users are personal too, but not "mine")
+  const customRecipes = recipes.filter(r => r.isCustom && r.isOwner);
   const handleDelete = recipe => {
     const isCooking = timers.some(timer => timer.recipeId === recipe.id);
     confirmAction({

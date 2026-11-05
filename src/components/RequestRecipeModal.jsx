@@ -32,11 +32,15 @@ export const RequestRecipeModal = ({ visible, onClose, recipe: presetRecipe = nu
 
   const needsRecipe = type !== 'new_recipe';
   const matches = useMemo(() => needsRecipe && !recipe
-    ? recipes.filter(r => !r.isCustom && matchesSearch([r.title, r.category], query)).slice(0, 6)
+    ? recipes.filter(r => !r.isOwner && matchesSearch([r.title, r.category], query)).slice(0, 6)
     : [], [needsRecipe, recipe, recipes, query]);
 
-  const handleSubmit = () => {
-    const result = submitRecipeRequest({ type, title, details, recipe: needsRecipe ? recipe : null, user });
+  const [isSending, setIsSending] = useState(false);
+  const handleSubmit = async () => {
+    if (isSending) return;
+    setIsSending(true);
+    const result = await submitRecipeRequest({ type, title, details, recipe: needsRecipe ? recipe : null, user });
+    setIsSending(false);
     if (result.errors) {
       showAlert('Chưa gửi được', result.errors.map(e => `• ${e}`).join('\n'));
       return;

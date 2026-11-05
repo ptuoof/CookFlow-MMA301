@@ -49,9 +49,11 @@ export const PantryFinderModal = ({ visible, onClose, onSelectRecipe }) => {
       });
   }, [recipes, pantryKeys, assumeStaples]);
 
-  const handleAddMissing = result => {
+  const handleAddMissing = async result => {
     if (!result.missingIngredients.length) return;
-    const { added, merged } = addToShoppingList(result.missingIngredients, result.recipe.title);
+    const saved = await addToShoppingList(result.missingIngredients, result.recipe.title);
+    if (!saved) return;
+    const { added, merged } = saved;
     showAlert('Đã cập nhật giỏ đi chợ', `Món ${result.recipe.title}: thêm mới ${added}${merged ? `, cộng dồn ${merged}` : ''} nguyên liệu còn thiếu.`);
   };
   const handleClearPantry = () => confirmAction({

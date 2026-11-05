@@ -210,7 +210,8 @@ export const AiChefChatModal = ({
 
   // Reuse the user's existing personal copy so repeated applies don't pile up duplicates
   const liveRecipe = recipe ? recipes.find(r => r.id === recipe.id) || recipe : null;
-  const existingVariant = liveRecipe && !liveRecipe.variantOf ? recipes.find(r => r.variantOf === liveRecipe.id) : null;
+  // Only the user's own variant is updated (another user's shared variant is copied instead)
+  const existingVariant = liveRecipe && !liveRecipe.variantOf ? recipes.find(r => r.variantOf === liveRecipe.id && r.isOwner) : null;
   const toggleChange = id => setProposal(prev => ({
     ...prev,
     selected: {
@@ -218,20 +219,21 @@ export const AiChefChatModal = ({
       [id]: !prev.selected[id]
     }
   }));
-  const handleAddToCart = () => {
+  const handleAddToCart = async () => {
     const items = shoppingItemsForChanges(selectedChanges);
     if (items.length === 0) {
       showAlert('Không có gì để mua', 'Các thay đổi đã chọn chỉ bỏ bớt nguyên liệu.');
       return;
     }
-    addToShoppingList(items, `${recipe.title} • thay thế AI`);
+    if (!(await addToShoppingList(items, `${recipe.title} • thay thế AI`))) return;
     setProposal(prev => ({
       ...prev,
       cartDone: true
     }));
   };
-  const handleSaveVariant = () => {
-    const target = existingVariant || liveRecipe;
+  const handleSaveVariant = async () => {
+    const found = existingVariant || liveRecipe;
+    const target = found.variantOf && !found.isOwner ? { ...found, variantOf: undefined } : found;
     const targetIds = new Set(target.ingredients.map(i => i.id));
     const applicable = selectedChanges.filter(c => targetIds.has(c.replacesId));
     if (applicable.length === 0) {
@@ -239,11 +241,8 @@ export const AiChefChatModal = ({
       return;
     }
     const result = buildPersonalVariant(target, applicable);
-    if (result.mode === 'update') {
-      updateRecipe(result.recipe);
-    } else {
-      addRecipe(result.recipe);
-    }
+    const saved = result.mode === 'update' ? await updateRecipe(result.recipe) : await addRecipe(result.recipe);
+    if (!saved) return; // error already shown
     setProposal(prev => ({
       ...prev,
       savedTitle: result.recipe.title

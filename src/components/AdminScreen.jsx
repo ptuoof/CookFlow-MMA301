@@ -99,13 +99,13 @@ function CategoriesTab() {
   const [newName, setNewName] = useState('');
   const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState('');
-  const handleAdd = () => {
-    const error = addCategory(newName);
+  const handleAdd = async () => {
+    const error = await addCategory(newName);
     if (error) return showAlert('Chưa thêm được', error);
     setNewName('');
   };
-  const handleRename = () => {
-    const error = renameCategory(editing, draft);
+  const handleRename = async () => {
+    const error = await renameCategory(editing, draft);
     if (error) return showAlert('Chưa đổi tên được', error);
     setEditing(null);
   };
@@ -116,8 +116,8 @@ function CategoriesTab() {
       message: count ? `${count} công thức trong danh mục này sẽ chuyển sang danh mục mặc định.` : 'Danh mục đang trống.',
       confirmText: 'Xóa',
       destructive: true,
-      onConfirm: () => {
-        const error = deleteCategory(name);
+      onConfirm: async () => {
+        const error = await deleteCategory(name);
         if (error) showAlert('Không xóa được', error);
       }
     });

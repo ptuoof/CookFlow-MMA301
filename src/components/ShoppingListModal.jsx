@@ -74,7 +74,7 @@ export const ShoppingListModal = ({
     remaining: group.items.filter(item => !item.checked).length,
     items: [...group.items].sort((a, b) => Number(a.checked) - Number(b.checked))
   }));
-  const handleAddItem = () => {
+  const handleAddItem = async () => {
     if (!newName.trim()) {
       showAlert('Thiếu tên nguyên liệu', 'Vui lòng nhập tên nguyên liệu cần mua.');
       return;
@@ -83,8 +83,9 @@ export const ShoppingListModal = ({
       showAlert('Số lượng chưa hợp lệ', AMOUNT_HINT);
       return;
     }
-    const { merged } = addCustomShoppingItem(newName, newAmount, newUnit);
-    if (merged) showAlert('Đã cộng dồn', `"${newName.trim()}" đã có trong danh sách nên số lượng được cộng thêm.`);
+    const result = await addCustomShoppingItem(newName, newAmount, newUnit);
+    if (!result) return; // error already shown, keep what was typed
+    if (result.merged) showAlert('Đã cộng dồn', `"${newName.trim()}" đã có trong danh sách nên số lượng được cộng thêm.`);
     setNewName('');
     setNewAmount('');
     setNewUnit('');

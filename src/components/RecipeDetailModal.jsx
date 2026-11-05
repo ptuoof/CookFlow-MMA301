@@ -61,15 +61,17 @@ export const RecipeDetailModal = ({
   const declared = allergens.filter(found => myAllergies.has(found.id));
   const readyCount = recipe.ingredients.filter(item => checkedIngredients[item.id]).length;
   const missingIngredients = recipe.ingredients.filter(item => !checkedIngredients[item.id]);
-  const handleAddToShopping = () => {
+  const handleAddToShopping = async () => {
     if (missingIngredients.length === 0) {
       showAlert('Đã đủ nguyên liệu ✓', 'Bạn đã đánh dấu có sẵn tất cả nguyên liệu, không cần mua thêm.');
       return;
     }
-    const { added, merged } = addToShoppingList(missingIngredients.map(item => ({
+    const saved = await addToShoppingList(missingIngredients.map(item => ({
       ...item,
       amount: scaleAmount(item.amount, ratio)
     })), `${recipe.title} (${currentServings} người)`);
+    if (!saved) return;
+    const { added, merged } = saved;
     showAlert('Đã cập nhật danh sách đi chợ 🛒', [added ? `Thêm mới ${added} nguyên liệu.` : '', merged ? `Cộng dồn ${merged} nguyên liệu đã có trong danh sách.` : ''].filter(Boolean).join(' '));
   };
   const isFav = isFavorite(recipe.id);
@@ -154,13 +156,13 @@ export const RecipeDetailModal = ({
               </View> : null}
             {/* Built-in recipes are read-only: customizing goes through a personal copy */}
             <View style={styles.recipeActions}>
-              {recipe.isCustom && onEditRecipe ? <Pressable accessibilityRole="button" onPress={() => onEditRecipe(recipe)} style={styles.recipeActionBtn}>
+              {recipe.isCustom && recipe.isOwner && onEditRecipe ? <Pressable accessibilityRole="button" onPress={() => onEditRecipe(recipe)} style={styles.recipeActionBtn}>
                   <Text style={styles.recipeActionText}>✎ Sửa công thức</Text>
                 </Pressable> : null}
               {onDuplicateRecipe ? <Pressable accessibilityRole="button" onPress={() => onDuplicateRecipe(recipe)} style={styles.recipeActionBtn}>
                   <Text style={styles.recipeActionText}>⧉ Tạo bản sao để chỉnh</Text>
                 </Pressable> : null}
-              {!recipe.isCustom ? <Pressable accessibilityRole="button" onPress={() => setIsReportVisible(true)} style={styles.recipeActionBtn}>
+              {!recipe.isOwner ? <Pressable accessibilityRole="button" onPress={() => setIsReportVisible(true)} style={styles.recipeActionBtn}>
                   <Text style={[styles.recipeActionText, styles.reportText]}>⚑ Báo cáo / góp ý</Text>
                 </Pressable> : null}
             </View>

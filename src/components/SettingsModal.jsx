@@ -56,14 +56,16 @@ export const SettingsModal = ({
       title: 'Khôi phục bản sao lưu?',
       message: [
         `Bản sao lưu có ${summary.recipes} món tự tạo, ${summary.shopping} mục đi chợ, ${summary.pantry} nguyên liệu trong tủ và ${summary.history} lần nấu.`,
-        'Dữ liệu hiện tại trên máy sẽ bị THAY THẾ (công thức có sẵn của ứng dụng giữ nguyên).',
+        'Dữ liệu hiện tại của tài khoản sẽ bị THAY THẾ (công thức có sẵn của ứng dụng giữ nguyên).',
         summary.localMedia ? `${summary.localMedia} món dùng ảnh từ máy cũ có thể không hiển thị ảnh.` : ''
       ].filter(Boolean).join('\n\n'),
       confirmText: 'Khôi phục',
       destructive: true,
-      onConfirm: () => {
-        restoreBackup(parsed.data);
-        showAlert('Đã khôi phục ✓', 'Dữ liệu từ bản sao lưu đã được áp dụng.');
+      onConfirm: async () => {
+        setIsBusy(true);
+        const restored = await restoreBackup(parsed.data);
+        setIsBusy(false);
+        if (restored) showAlert('Đã khôi phục ✓', 'Dữ liệu từ bản sao lưu đã được áp dụng.');
       }
     });
   };
@@ -72,9 +74,8 @@ export const SettingsModal = ({
     message: 'Mọi món tự tạo, yêu thích, danh sách đi chợ, tủ lạnh, lịch sử nấu và cài đặt sẽ bị xóa vĩnh viễn. Hãy xuất bản sao lưu trước nếu cần.',
     confirmText: 'Xóa tất cả',
     destructive: true,
-    onConfirm: () => {
-      resetAllData();
-      showAlert('Đã xóa dữ liệu', 'Ứng dụng đã trở về trạng thái ban đầu.');
+    onConfirm: async () => {
+      if (await resetAllData()) showAlert('Đã xóa dữ liệu', 'Ứng dụng đã trở về trạng thái ban đầu.');
     }
   });
   const keepAwake = settings.keepAwake;

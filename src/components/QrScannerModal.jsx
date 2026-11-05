@@ -54,10 +54,10 @@ export const QrScannerModal = ({
     setScanError('');
     isHandlingScanRef.current = false;
   };
-  const saveImported = () => {
-    const saved = addRecipe(scannedRecipe);
+  const saveImported = async () => {
+    const saved = await addRecipe(scannedRecipe);
+    if (!saved) return; // error already shown; keep the preview so the user can retry
     handleClose();
-    if (!saved) return;
     if (onImported) onImported(saved);
     // Wait for the sheet to dismiss so the alert is not torn down with it on iOS
     setTimeout(() => {

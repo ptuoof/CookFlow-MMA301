@@ -49,20 +49,23 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
   const progress = goalProgress(kcal.eaten, goal);
   const plannedProgress = goalProgress(kcal.eaten + kcal.planned, goal);
 
-  const handleShopping = () => {
+  const handleShopping = async () => {
     const from = selected < today ? today : selected;
     const to = week[6];
-    const { added, merged, dishes } = addPlanToShopping(from, to);
+    const result = await addPlanToShopping(from, to);
+    if (!result) return;
+    const { added, merged, dishes } = result;
     if (!dishes) {
       showAlert('Chưa có món nào để mua', `Từ ${dayTitle(from, today).toLowerCase()} đến hết ${shortDate(to)} chưa có món kế hoạch (từ công thức) nào.`);
       return;
     }
     showAlert('Đã cập nhật giỏ đi chợ 🛒', `${dishes} món trong kế hoạch • thêm ${added} • cộng dồn ${merged} nguyên liệu.`);
   };
-  const handleCopyToTomorrow = () => {
+  const handleCopyToTomorrow = async () => {
     const target = addDays(selected, 1);
     if (target > maxDay) return;
-    const count = copyMealDay(selected, target);
+    const count = await copyMealDay(selected, target);
+    if (count === null) return;
     if (count) showAlert('Đã sao chép', `${count} món được thêm vào ${dayTitle(target, today).toLowerCase()}.`);
     else showAlert('Không có gì để sao chép', 'Ngày này chưa có món nào được thêm thủ công.');
   };
@@ -176,9 +179,10 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
         date={selected}
         isPast={kind === 'past'}
         onClose={() => setAddingSlot(null)}
-        onAdd={input => {
-          const entry = addMealEntry({ ...input, date: selected, slot: addingSlot });
-          if (!entry) return showAlert('Chưa thêm được', 'Hãy chọn một công thức hoặc nhập tên món.');
+        onAdd={async input => {
+          const entry = await addMealEntry({ ...input, date: selected, slot: addingSlot });
+          if (entry === null) return showAlert('Chưa thêm được', 'Hãy chọn một công thức hoặc nhập tên món.');
+          if (!entry) return; // refused by the server, already reported
           setAddingSlot(null);
         }}
       />
