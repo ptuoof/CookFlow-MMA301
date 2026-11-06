@@ -62,6 +62,12 @@ export const CookingModeModal = ({
   useEffect(() => {
     setViewMode('video');
   }, [safeStepIndex]);
+  // Every step (and every return to Cooking Mode) starts on its instructions + timer, even if the
+  // user had scrolled down to the ingredients or the video
+  const scrollRef = useRef(null);
+  useEffect(() => {
+    if (visible) scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [visible, safeStepIndex, recipe?.id]);
   // Keep the screen on while cooking (setting in Cài đặt)
   useEffect(() => {
     if (!visible || !settings.keepAwake || Platform.OS === 'web') return undefined;
@@ -188,14 +194,11 @@ export const CookingModeModal = ({
           </View>
         </View>
 
-        {/* Step Content */}
-        <ScrollView style={{
+        {/* Step Content: what to do now (instructions + timer) first; ingredients and video below */}
+        <ScrollView ref={scrollRef} style={{
         flex: 1,
         width: '100%'
       }} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-          {/* Step Video Player Component */}
-          <StepVideoPlayer key={`video_${recipe.id}_step_${currentStep.stepNumber}`} videoUrl={currentStep.videoUrl || recipe.videoUrl} fallbackImage={currentStep.image || recipe.imageUrl} stepNumber={currentStep.stepNumber} stepTitle={currentStep.title} />
-
           {/* View Mode Switcher: Video vs Timer */}
           <View style={styles.modeSwitcher}>
             <Pressable onPress={() => setViewMode('video')} style={[styles.modeBtn, viewMode === 'video' && styles.modeBtnActive]}>
@@ -210,23 +213,6 @@ export const CookingModeModal = ({
               </Text>
             </Pressable>
           </View>
-
-          {/* Ingredients scaled to the servings being cooked */}
-          <Pressable accessibilityRole="button" accessibilityState={{ expanded: showIngredients }} onPress={() => setShowIngredients(open => !open)} style={styles.ingredientsToggle}>
-            <Text style={styles.ingredientsToggleText}>
-              🧾 NGUYÊN LIỆU CHO {servings} NGƯỜI{servings !== recipe.servings ? ` (GỐC ${recipe.servings})` : ''}
-            </Text>
-            <Text style={styles.ingredientsToggleText}>{showIngredients ? '▴' : '▾'}</Text>
-          </Pressable>
-          {showIngredients ? <View style={styles.ingredientsPanel}>
-              {recipe.ingredients.map(item => <View key={item.id} style={styles.ingredientLine}>
-                  <Text style={styles.ingredientName}>{item.name}</Text>
-                  <Text style={styles.ingredientAmount}>{scaleAmount(item.amount, ratio)} {item.unit}</Text>
-                </View>)}
-              {ratio !== 1 ? <Text style={styles.ingredientsNote}>
-                  Định lượng trong lời hướng dẫn từng bước được viết cho {recipe.servings} người — hãy dùng số ở bảng này.
-                </Text> : null}
-            </View> : null}
 
           {/* Main Step Card */}
           <View style={styles.stepCard}>
@@ -263,6 +249,28 @@ export const CookingModeModal = ({
 
                 <TimerCircle key={`timer_${recipe.id}_${safeStepIndex}`} recipe={recipe} stepIndex={safeStepIndex} defaultSeconds={currentStep.timerSeconds || 180} />
               </View> : null}
+          </View>
+
+          {/* Ingredients scaled to the servings being cooked */}
+          <Pressable accessibilityRole="button" accessibilityState={{ expanded: showIngredients }} onPress={() => setShowIngredients(open => !open)} style={styles.ingredientsToggle}>
+            <Text style={styles.ingredientsToggleText}>
+              🧾 NGUYÊN LIỆU CHO {servings} NGƯỜI{servings !== recipe.servings ? ` (GỐC ${recipe.servings})` : ''}
+            </Text>
+            <Text style={styles.ingredientsToggleText}>{showIngredients ? '▴' : '▾'}</Text>
+          </Pressable>
+          {showIngredients ? <View style={styles.ingredientsPanel}>
+              {recipe.ingredients.map(item => <View key={item.id} style={styles.ingredientLine}>
+                  <Text style={styles.ingredientName}>{item.name}</Text>
+                  <Text style={styles.ingredientAmount}>{scaleAmount(item.amount, ratio)} {item.unit}</Text>
+                </View>)}
+              {ratio !== 1 ? <Text style={styles.ingredientsNote}>
+                  Định lượng trong lời hướng dẫn từng bước được viết cho {recipe.servings} người — hãy dùng số ở bảng này.
+                </Text> : null}
+            </View> : null}
+
+          {/* Step Video Player Component */}
+          <View style={styles.videoSection}>
+            <StepVideoPlayer key={`video_${recipe.id}_step_${currentStep.stepNumber}`} videoUrl={currentStep.videoUrl || recipe.videoUrl} fallbackImage={currentStep.image || recipe.imageUrl} stepNumber={currentStep.stepNumber} stepTitle={currentStep.title} />
           </View>
 
           <View style={{
@@ -338,9 +346,12 @@ export const CookingModeModal = ({
     </Modal>;
 };
 const styles = StyleSheet.create({
+  videoSection: {
+    marginTop: 16
+  },
   ingredientsToggle: {
     minHeight: 44,
-    marginTop: 12,
+    marginTop: 16,
     paddingHorizontal: 16,
     borderRadius: Radius.md,
     backgroundColor: HeronColors.card,
@@ -592,8 +603,6 @@ const styles = StyleSheet.create({
   },
   stepCard: {
     width: '100%',
-    // Room below the "Nguyên liệu cho N người" toggle / panel above it
-    marginTop: 16,
     backgroundColor: '#FFFFFF',
     borderRadius: Radius.lg,
     padding: 20,
