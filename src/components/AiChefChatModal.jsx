@@ -33,7 +33,8 @@ export const GENERAL_SUGGESTIONS = [{
 }, {
   icon: '🧊',
   label: 'Tủ lạnh còn gì nấu nấy',
-  prompt: 'Mình còn trứng, cà chua, hành lá và cơm nguội. Nấu được món gì ngon?'
+  prompt: null,
+  usesPantry: true
 }];
 const RESCUE_SUGGESTION = {
   icon: '🆘',
@@ -61,6 +62,7 @@ export const AiChefChatModal = ({
     addRecipe,
     updateRecipe,
     addToShoppingList,
+    pantryIngredients,
     settings
   } = useRecipes();
   const scrollRef = useRef(null);
@@ -130,6 +132,8 @@ export const AiChefChatModal = ({
         currentStep,
         servings,
         allergies: (settings.allergies || []).map(allergenLabel),
+        pantryIngredients,
+        assumeStaples: settings.assumeStaples,
         history,
         question: text,
         signal: controller.signal
@@ -263,6 +267,17 @@ export const AiChefChatModal = ({
     setIsEditingKey(!fallbackKey);
   };
   const suggestions = !recipe ? GENERAL_SUGGESTIONS : currentStep ? [RESCUE_SUGGESTION, ...SOUS_CHEF_SUGGESTIONS] : SOUS_CHEF_SUGGESTIONS;
+  const handleSuggestion = suggestion => {
+    if (!suggestion.usesPantry) {
+      sendQuestion(suggestion.prompt);
+      return;
+    }
+    if (!pantryIngredients.length) {
+      showAlert('Tủ lạnh đang trống', 'Hãy thêm nguyên liệu trong mục “Tủ lạnh nhà tôi”, rồi thử gợi ý món ăn lần nữa.');
+      return;
+    }
+    sendQuestion(`Trong tủ lạnh của mình hiện có: ${pantryIngredients.join(', ')}. Hãy gợi ý món có thể nấu, ưu tiên tận dụng các nguyên liệu này. Nêu rõ nguyên liệu nào đã có và nguyên liệu nào cần mua thêm.`);
+  };
   const showKeySetup = apiKey === '' || isEditingKey;
   const renderKeySetup = () => <ScrollView contentContainerStyle={styles.setupWrap} keyboardShouldPersistTaps="handled">
       <View style={styles.setupCard}>
@@ -387,7 +402,7 @@ export const AiChefChatModal = ({
 
       {/* Quick suggestions */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsBar} contentContainerStyle={styles.chipsContent} keyboardShouldPersistTaps="handled">
-        {suggestions.map(s => <Pressable key={s.label} onPress={() => sendQuestion(s.prompt)} disabled={isLoading} style={({
+        {suggestions.map(s => <Pressable key={s.label} onPress={() => handleSuggestion(s)} disabled={isLoading} style={({
         pressed
       }) => [styles.chip, isLoading && styles.chipDisabled, {
         transform: [{
