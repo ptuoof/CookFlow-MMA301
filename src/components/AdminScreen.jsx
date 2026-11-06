@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { Image, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Image, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+// react-native's SafeAreaView only works on iOS: on Android the header slid under the status bar
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeronColors as C, Radius } from '../constants/theme';
 import { useAuth } from '../context/AuthContext';
 import { useRecipes } from '../context/RecipeContext';
