@@ -4,12 +4,12 @@ import { HeronColors, HeronShadow, Radius, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
 import { useAuth } from '../context/AuthContext';
 import { MyRecipesView } from './MyRecipesView';
-import { RequestRecipeModal } from './RequestRecipeModal';
+import { REQUEST_TYPE_TINT, RequestRecipeModal } from './RequestRecipeModal';
 import { AppleButton } from './ui/AppleButton';
 import { confirmAction, showAlert } from '../utils/dialog';
 import { CALORIE_GOAL_MAX, CALORIE_GOAL_MIN } from '../utils/nutrition';
 import { addDays, dateKey, loggedDays } from '../utils/mealPlan';
-import { requestStatus, requestType } from '../utils/recipeRequests';
+import { REQUEST_STATUSES, countByStatus, requestStatus, requestType } from '../utils/recipeRequests';
 import { formatCookedDay } from '../utils/history';
 
 const initialsOf = name => String(name || '?').trim().split(/\s+/).slice(-2).map(word => word[0]).join('').toUpperCase();
@@ -25,6 +25,7 @@ export const ProfileScreen = ({ view, onChangeView, onSelectRecipe, onEditRecipe
   const [isRequestVisible, setIsRequestVisible] = useState(false);
   const [isEditVisible, setIsEditVisible] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
+  const [requestFilter, setRequestFilter] = useState('all');
   const myRequests = useMemo(() => recipeRequests.filter(r => r.userEmail === user?.email), [recipeRequests, user?.email]);
   const unreadReplies = myRequests.filter(r => r.adminReply && r.status !== 'pending').length;
   const today = dateKey();
@@ -49,37 +50,60 @@ export const ProfileScreen = ({ view, onChangeView, onSelectRecipe, onEditRecipe
       </View>;
   }
   if (view === 'requests') {
+    const statusCounts = countByStatus(myRequests);
+    const filters = [{ id: 'all', label: 'Tất cả', count: myRequests.length }, ...REQUEST_STATUSES.map(s => ({ id: s.id, label: s.label, count: statusCounts[s.id], color: s.color }))];
+    const shown = requestFilter === 'all' ? myRequests : myRequests.filter(r => r.status === requestFilter);
+    const withdraw = request => confirmAction({
+      title: 'Thu hồi yêu cầu?',
+      message: request.title,
+      confirmText: 'Thu hồi',
+      destructive: true,
+      onConfirm: () => deleteRecipeRequest(request.id)
+    });
     return <View style={{ flex: 1 }}>
-        <SubHeader title="Yêu cầu của tôi" onBack={() => onChangeView('home')} action="+ Gửi mới" onAction={() => setIsRequestVisible(true)} />
-        <ScrollView contentContainerStyle={styles.subContent}>
+        <SubHeader title="Yêu cầu của tôi" onBack={() => onChangeView('home')} action="＋ Gửi mới" onAction={() => setIsRequestVisible(true)} />
+        {myRequests.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow} contentContainerStyle={styles.filterContent}>
+            {filters.map(filter => {
+              const active = requestFilter === filter.id;
+              return <Pressable key={filter.id} accessibilityRole="tab" accessibilityState={{ selected: active }} onPress={() => setRequestFilter(filter.id)} style={[styles.filterChip, active && styles.filterChipActive]}>
+                  {filter.color ? <View style={[styles.filterDot, { backgroundColor: filter.color }]} /> : null}
+                  <Text style={[styles.filterText, active && styles.filterTextActive]}>{filter.label}</Text>
+                  <Text style={[styles.filterCount, active && styles.filterTextActive]}>{filter.count}</Text>
+                </Pressable>;
+            })}
+          </ScrollView> : null}
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.subContent}>
           {myRequests.length === 0 ? <View style={styles.emptyBox}>
+              <View style={styles.emptyIcon}><Text style={{ fontSize: 30 }}>📮</Text></View>
               <Text style={styles.emptyTitle}>Chưa có yêu cầu nào</Text>
               <Text style={styles.emptyText}>Muốn CookFlow có thêm món, hay thấy công thức chưa đúng? Gửi cho quản trị viên tại đây.</Text>
-              <AppleButton title="Gửi yêu cầu" onPress={() => setIsRequestVisible(true)} style={{ marginTop: 14 }} />
-            </View> : myRequests.map(request => {
+              <AppleButton title="Gửi yêu cầu đầu tiên" onPress={() => setIsRequestVisible(true)} style={{ marginTop: 16, alignSelf: 'stretch' }} />
+            </View> : !shown.length ? <Text style={styles.filterEmpty}>Không có yêu cầu nào ở trạng thái này.</Text> : shown.map(request => {
             const status = requestStatus(request.status);
             const type = requestType(request.type);
             return <View key={request.id} style={styles.requestCard}>
                 <View style={styles.requestTop}>
-                  <Text style={styles.requestType}>{type.icon} {type.label}</Text>
-                  <View style={[styles.statusPill, { backgroundColor: status.bg }]}><Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text></View>
+                  <View style={[styles.requestIcon, { backgroundColor: REQUEST_TYPE_TINT[request.type] || HeronColors.cardAlt }]}><Text style={{ fontSize: 18 }}>{type.icon}</Text></View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.requestType}>{type.label}</Text>
+                    <Text style={styles.requestTitle} numberOfLines={2}>{request.title}</Text>
+                  </View>
+                  <View style={[styles.statusPill, { backgroundColor: status.bg }]}>
+                    <View style={[styles.statusDot, { backgroundColor: status.color }]} />
+                    <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
+                  </View>
                 </View>
-                <Text style={styles.requestTitle}>{request.title}</Text>
-                {request.recipeTitle && request.type !== 'new_recipe' ? <Text style={styles.requestMeta}>Công thức: {request.recipeTitle}</Text> : null}
+                {request.recipeTitle && request.type !== 'new_recipe' ? <View style={styles.recipeTag}><Text style={styles.recipeTagText} numberOfLines={1}>📖 {request.recipeTitle}</Text></View> : null}
                 <Text style={styles.requestDetails}>{request.details}</Text>
                 {request.adminReply ? <View style={styles.reply}>
-                    <Text style={styles.replyLabel}>Phản hồi của quản trị viên</Text>
+                    <Text style={styles.replyLabel}>💬 Phản hồi của quản trị viên</Text>
                     <Text style={styles.replyText}>{request.adminReply}</Text>
                   </View> : null}
                 <View style={styles.requestFoot}>
-                  <Text style={styles.requestMeta}>Gửi {formatCookedDay(request.createdAt).toLowerCase()}</Text>
-                  {request.status === 'pending' ? <Pressable hitSlop={8} onPress={() => confirmAction({
-                title: 'Thu hồi yêu cầu?',
-                message: request.title,
-                confirmText: 'Thu hồi',
-                destructive: true,
-                onConfirm: () => deleteRecipeRequest(request.id)
-              })}><Text style={styles.withdraw}>Thu hồi</Text></Pressable> : null}
+                  <Text style={styles.requestMeta}>🕒 Gửi {formatCookedDay(request.createdAt).toLowerCase()}</Text>
+                  {request.status === 'pending' ? <Pressable accessibilityRole="button" hitSlop={8} onPress={() => withdraw(request)} style={({ pressed }) => [styles.withdrawBtn, pressed && { opacity: 0.7 }]}>
+                      <Text style={styles.withdraw}>Thu hồi</Text>
+                    </Pressable> : null}
                 </View>
               </View>;
           })}
@@ -315,22 +339,37 @@ const styles = StyleSheet.create({
   subAction: { fontSize: 12, fontWeight: '800', color: HeronColors.brandHover },
   subSpacer: { width: 40 },
   subContent: { paddingHorizontal: Spacing.lg, gap: 10 },
-  emptyBox: { padding: 20, borderRadius: Radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center' },
-  emptyTitle: { fontSize: 15, fontWeight: '800', color: HeronColors.primary },
-  emptyText: { fontSize: 13, color: HeronColors.granite, textAlign: 'center', marginTop: 6, lineHeight: 18 },
-  requestCard: { padding: 14, borderRadius: Radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, gap: 6 },
-  requestTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  filterRow: { flexGrow: 0 },
+  filterContent: { paddingHorizontal: Spacing.lg, paddingBottom: 12, gap: 8 },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: Radius.full, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border },
+  filterChipActive: { backgroundColor: HeronColors.primary, borderColor: HeronColors.primary },
+  filterDot: { width: 7, height: 7, borderRadius: 4 },
+  filterText: { fontSize: 12, fontWeight: '800', color: HeronColors.secondary },
+  filterTextActive: { color: '#FFFFFF' },
+  filterCount: { fontSize: 12, fontWeight: '800', color: HeronColors.disable },
+  filterEmpty: { marginTop: 30, textAlign: 'center', fontSize: 13, color: HeronColors.granite },
+  emptyBox: { marginTop: 20, paddingVertical: 28, paddingHorizontal: 22, borderRadius: Radius.lg, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center' },
+  emptyIcon: { width: 72, height: 72, borderRadius: 36, backgroundColor: HeronColors.brandLight, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  emptyTitle: { fontSize: 17, fontWeight: '900', color: HeronColors.primary },
+  emptyText: { fontSize: 13, color: HeronColors.granite, textAlign: 'center', marginTop: 6, lineHeight: 19 },
+  requestCard: { padding: 14, borderRadius: Radius.lg, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, gap: 10, ...HeronShadow.subtle },
+  requestTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  requestIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   requestType: { fontSize: 11, fontWeight: '800', color: HeronColors.granite },
-  statusPill: { paddingHorizontal: 9, paddingVertical: 3, borderRadius: Radius.full },
+  requestTitle: { marginTop: 2, fontSize: 15, fontWeight: '800', color: HeronColors.primary, lineHeight: 20 },
+  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 4, borderRadius: Radius.full },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
   statusText: { fontSize: 11, fontWeight: '800' },
-  requestTitle: { fontSize: 15, fontWeight: '800', color: HeronColors.primary },
-  requestDetails: { fontSize: 13, color: HeronColors.secondary, lineHeight: 18 },
+  recipeTag: { alignSelf: 'flex-start', maxWidth: '100%', paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full, backgroundColor: HeronColors.cardAlt, borderWidth: 1, borderColor: HeronColors.borderLight },
+  recipeTagText: { fontSize: 12, fontWeight: '700', color: HeronColors.secondary },
+  requestDetails: { fontSize: 13, color: HeronColors.secondary, lineHeight: 19 },
   requestMeta: { fontSize: 11, color: HeronColors.granite },
-  reply: { padding: 10, borderRadius: Radius.sm, backgroundColor: HeronColors.cardAlt, borderLeftWidth: 3, borderLeftColor: HeronColors.brand },
-  replyLabel: { fontSize: 10, fontWeight: '900', color: HeronColors.brand, letterSpacing: 0.5 },
-  replyText: { fontSize: 13, color: HeronColors.primary, marginTop: 3, lineHeight: 18 },
-  requestFoot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 },
-  withdraw: { fontSize: 12, fontWeight: '800', color: HeronColors.brand },
+  reply: { padding: 12, borderRadius: 12, backgroundColor: HeronColors.blueLight, borderLeftWidth: 3, borderLeftColor: HeronColors.blue },
+  replyLabel: { fontSize: 11, fontWeight: '900', color: HeronColors.blue },
+  replyText: { fontSize: 13, color: HeronColors.primary, marginTop: 4, lineHeight: 19 },
+  requestFoot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 10, borderTopWidth: 1, borderTopColor: HeronColors.borderLight },
+  withdrawBtn: { height: 30, paddingHorizontal: 14, justifyContent: 'center', borderRadius: Radius.full, backgroundColor: '#FFF1F0', borderWidth: 1, borderColor: '#FFD5D1' },
+  withdraw: { fontSize: 12, fontWeight: '800', color: '#D92D20' },
   backdrop: { flex: 1, backgroundColor: 'rgba(20,20,20,0.45)', justifyContent: 'center', padding: 24 },
   sheet: { width: '100%', maxWidth: 420, alignSelf: 'center', backgroundColor: '#FFFFFF', borderRadius: Radius.lg, padding: 20 },
   sheetTitle: { fontSize: 18, fontWeight: '900', color: HeronColors.primary, marginBottom: 6 },
