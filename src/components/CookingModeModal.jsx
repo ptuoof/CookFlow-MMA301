@@ -592,6 +592,8 @@ const styles = StyleSheet.create({
   },
   stepCard: {
     width: '100%',
+    // Room below the "Nguyên liệu cho N người" toggle / panel above it
+    marginTop: 16,
     backgroundColor: '#FFFFFF',
     borderRadius: Radius.lg,
     padding: 20,
