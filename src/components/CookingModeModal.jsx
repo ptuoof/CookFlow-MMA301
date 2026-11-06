@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform, TextInput } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { BlurTargetView, BlurView } from 'expo-blur';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { TimerCircle } from './ui/TimerCircle';
@@ -49,6 +50,9 @@ export const CookingModeModal = ({
   const countScale = useRef(new Animated.Value(1)).current;
   // Android blurs only what is inside a BlurTargetView: the whole cooking screen
   const blurTargetRef = useRef(null);
+  // The modal draws under the status / navigation bars: the header and the footer extend behind
+  // them (same white), instead of Android painting two grey bands
+  const insets = useSafeAreaInsets();
   const [showIngredients, setShowIngredients] = useState(false);
   // Pantry entries the user marks as used up when the dish is done
   const [usedUp, setUsedUp] = useState({});
@@ -205,12 +209,13 @@ export const CookingModeModal = ({
     endCookingSession();
     onClose();
   };
-  return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} onRequestClose={handleExit}>
+  return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} statusBarTranslucent navigationBarTranslucent onRequestClose={handleExit}>
+      <StatusBar style="dark" />
       <View style={styles.root}>
       <BlurTargetView ref={blurTargetRef} style={styles.root}>
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView edges={['left', 'right']} style={styles.container}>
         {/* Header: close · step + progress (flexible, never overflows) · voice · AI */}
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: insets.top + Spacing.sm }]}>
           <View style={styles.headerTopRow}>
             <Pressable accessibilityRole="button" accessibilityLabel="Đóng chế độ nấu" hitSlop={6} onPress={handleExit} style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}>
               <Text style={styles.iconButtonText}>✕</Text>
@@ -328,7 +333,7 @@ export const CookingModeModal = ({
         </ScrollView>
 
         {/* Bottom Navigation Dock */}
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: insets.bottom + Spacing.md }]}>
           <Pressable onPress={handlePrev} disabled={safeStepIndex === 0} style={[styles.navBtn, styles.prevBtn, safeStepIndex === 0 && styles.btnDisabled]}>
             <Text style={styles.prevBtnText}>‹ BƯỚC TRƯỚC</Text>
           </Pressable>
