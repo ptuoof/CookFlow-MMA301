@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform, TextInput } from 'react-native';
+import { Animated, Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { TimerCircle } from './ui/TimerCircle';
@@ -15,12 +15,16 @@ import { scaleAmount } from '../utils/quantity';
 import { pantryItemsUsedBy } from '../utils/pantry';
 import { NOTE_MAX_LENGTH } from '../utils/history';
 const KEEP_AWAKE_TAG = 'cookflow-cooking-mode';
+const COUNTDOWN_SECONDS = 5;
 const pad2 = n => String(n).padStart(2, '0');
-// The step being cooked lives in the context's cooking session (persisted), not in this screen
+// The step being cooked lives in the context's cooking session (persisted), not in this screen.
+// `countdown`: a new cooking session starts with a 5-second "get ready" screen; resuming does not.
 export const CookingModeModal = ({
   recipe,
   visible,
-  onClose
+  onClose,
+  countdown = false,
+  onCountdownDone
 }) => {
   const {
     timers, getStepTimer, clearRecipeTimers, settings,
@@ -33,8 +37,12 @@ export const CookingModeModal = ({
   const [isCelebrationVisible, setIsCelebrationVisible] = useState(false);
   const [viewMode, setViewMode] = useState('video');
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
-  const [voiceEnabled, setVoiceEnabled] = useState(false);
-  const lastAutoSpokenStep = useRef(null);
+  // Each step is read aloud automatically the first time it is shown in a cooking session
+  // ("Nghe lại" reads it again); the header button turns that off / on
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const spokenSteps = useRef(new Set());
+  const [countLeft, setCountLeft] = useState(COUNTDOWN_SECONDS);
+  const countScale = useRef(new Animated.Value(1)).current;
   const [showIngredients, setShowIngredients] = useState(false);
   // Pantry entries the user marks as used up when the dish is done
   const [usedUp, setUsedUp] = useState({});
@@ -50,7 +58,7 @@ export const CookingModeModal = ({
   const ratio = servings / Math.max(1, recipe?.servings || 1);
   const usedPantryItems = useMemo(() => recipe ? pantryItemsUsedBy(recipe, pantryIngredients) : [], [recipe, pantryIngredients]);
   useEffect(() => {
-    setVoiceEnabled(false);
+    setVoiceEnabled(true);
     setIsCelebrationVisible(false);
     setViewMode('video');
     setShowIngredients(false);
@@ -76,23 +84,45 @@ export const CookingModeModal = ({
       Promise.resolve().then(() => deactivateKeepAwake(KEEP_AWAKE_TAG)).catch(() => {});
     };
   }, [visible, settings.keepAwake]);
+  // A new session (new startedAt) reads every step again; leaving and coming back does not
   useEffect(() => {
-    if (visible && voiceEnabled && currentStep) {
-      const stepKey = `${recipe.id}:${safeStepIndex}`;
-      if (lastAutoSpokenStep.current === stepKey) return;
-      lastAutoSpokenStep.current = stepKey;
-      Speech.stop();
-      Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, { language: 'vi-VN' });
+    spokenSteps.current = new Set();
+  }, [cookingSession?.startedAt]);
+
+  // 5-second "get ready" countdown when a new cooking session starts. The parent re-renders every
+  // timer tick, so its callback is read through a ref: the countdown never restarts on a re-render.
+  const countdownDoneRef = useRef(onCountdownDone);
+  countdownDoneRef.current = onCountdownDone;
+  useEffect(() => {
+    if (visible && countdown) setCountLeft(COUNTDOWN_SECONDS);
+  }, [visible, countdown]);
+  useEffect(() => {
+    if (!visible || !countdown) return undefined;
+    if (countLeft <= 0) {
+      countdownDoneRef.current?.();
+      return undefined;
     }
-    return () => { Speech.stop(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, voiceEnabled, recipe?.id, safeStepIndex]);
-  const speakCurrentStep = () => {
+    countScale.setValue(1.35);
+    Animated.spring(countScale, { toValue: 1, friction: 5, useNativeDriver: true }).start();
+    const tick = setTimeout(() => setCountLeft(left => left - 1), 1000);
+    return () => clearTimeout(tick);
+  }, [visible, countdown, countLeft, countScale]);
+
+  const stepKey = recipe && currentStep ? `${recipe.id}:${currentStep.id}` : null;
+  const speakStep = () => {
     if (!currentStep) return;
-    lastAutoSpokenStep.current = `${recipe.id}:${safeStepIndex}`;
+    spokenSteps.current.add(stepKey);
     Speech.stop();
     Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, { language: 'vi-VN' });
   };
+  // Auto-read a step the first time it is shown (after the countdown)
+  useEffect(() => {
+    if (!visible || countdown || !voiceEnabled || !currentStep || spokenSteps.current.has(stepKey)) return undefined;
+    speakStep();
+    return () => { Speech.stop(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, countdown, voiceEnabled, stepKey]);
+  const speakCurrentStep = speakStep;
   const toggleVoice = () => {
     if (voiceEnabled) {
       Speech.stop();
@@ -291,6 +321,20 @@ export const CookingModeModal = ({
           </Pressable>
         </View>
 
+        {/* "Get ready" countdown of a new cooking session */}
+        {countdown ? <View style={styles.countdownOverlay}>
+            <Text style={styles.countdownTag}>CHUẨN BỊ VÀO BẾP</Text>
+            <Text style={styles.countdownRecipe} numberOfLines={2}>{recipe.title}</Text>
+            <Text style={styles.countdownMeta}>{servings} người • {totalSteps} bước</Text>
+            <Animated.View style={[styles.countdownCircle, { transform: [{ scale: countScale }] }]}>
+              <Text style={styles.countdownNumber}>{Math.max(countLeft, 1)}</Text>
+            </Animated.View>
+            <Text style={styles.countdownHint}>Rửa tay, bày nguyên liệu ra bàn — CookFlow sẽ đọc từng bước cho bạn.</Text>
+            <Pressable accessibilityRole="button" onPress={() => countdownDoneRef.current?.()} style={({ pressed }) => [styles.countdownSkip, pressed && { opacity: 0.8 }]}>
+              <Text style={styles.countdownSkipText}>Bắt đầu ngay ›</Text>
+            </Pressable>
+          </View> : null}
+
         {/* Overlay Chúc mừng hoàn thành món ăn */}
         {isCelebrationVisible && <View style={styles.celebrationOverlay}>
             {/* Scrolls on small screens: rating, note and pantry choices make the card tall */}
@@ -348,6 +392,71 @@ export const CookingModeModal = ({
 const styles = StyleSheet.create({
   videoSection: {
     marginTop: 16
+  },
+  countdownOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 20,
+    backgroundColor: HeronColors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32
+  },
+  countdownTag: {
+    color: HeronColors.brand,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 2
+  },
+  countdownRecipe: {
+    marginTop: 12,
+    color: '#FFFFFF',
+    fontSize: 26,
+    lineHeight: 32,
+    fontWeight: '800',
+    textAlign: 'center'
+  },
+  countdownMeta: {
+    marginTop: 6,
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 14,
+    fontWeight: '600'
+  },
+  countdownCircle: {
+    marginTop: 40,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    borderWidth: 6,
+    borderColor: HeronColors.brand,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  countdownNumber: {
+    color: '#FFFFFF',
+    fontSize: 96,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums']
+  },
+  countdownHint: {
+    marginTop: 36,
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center'
+  },
+  countdownSkip: {
+    marginTop: 28,
+    minHeight: 48,
+    paddingHorizontal: 28,
+    borderRadius: Radius.full,
+    backgroundColor: HeronColors.brand,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  countdownSkipText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800'
   },
   ingredientsToggle: {
     minHeight: 44,

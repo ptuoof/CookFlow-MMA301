@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRecipes } from '../context/RecipeContext';
@@ -65,6 +65,8 @@ export default function AppMainScreen() {
   // Modals state
   const [selectedRecipeForDetail, setSelectedRecipeForDetail] = useState(null);
   const [isCookingVisible, setIsCookingVisible] = useState(false);
+  const [isCookingCountdown, setIsCookingCountdown] = useState(false);
+  const endCookingCountdown = useCallback(() => setIsCookingCountdown(false), []);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState(null);
   // Recipe whose copy is being created ("Tạo bản sao để chỉnh")
@@ -114,7 +116,10 @@ export default function AppMainScreen() {
   };
   // The session ended elsewhere (dish finished, recipe deleted): the cooking screen is gone too
   useEffect(() => {
-    if (!activeRecipeForCooking) setIsCookingVisible(false);
+    if (!activeRecipeForCooking) {
+      setIsCookingVisible(false);
+      setIsCookingCountdown(false);
+    }
   }, [activeRecipeForCooking]);
   const switchCookingTo = (recipe, start) => {
     const current = activeRecipeForCooking;
@@ -133,8 +138,10 @@ export default function AppMainScreen() {
       showAlert('Chưa có bước nấu', 'Công thức này chưa có bước hướng dẫn nào. Hãy sửa công thức để thêm bước trước khi nấu.');
       return;
     }
+    // A new session opens on the 5-second "get ready" countdown; resuming never does
     const restart = () => {
       startCookingSession(recipe, { servings });
+      setIsCookingCountdown(true);
       setIsCookingVisible(true);
     };
     if (activeRecipeForCooking?.id === recipe.id && cookingStepIndex > 0) {
@@ -456,7 +463,16 @@ export default function AppMainScreen() {
           }}
         />
 
-        <CookingModeModal recipe={activeRecipeForCooking} visible={!!activeRecipeForCooking && isCookingVisible} onClose={() => setIsCookingVisible(false)} />
+        <CookingModeModal
+          recipe={activeRecipeForCooking}
+          visible={!!activeRecipeForCooking && isCookingVisible}
+          onClose={() => {
+            setIsCookingCountdown(false);
+            setIsCookingVisible(false);
+          }}
+          countdown={isCookingCountdown}
+          onCountdownDone={endCookingCountdown}
+        />
 
         {/* Timers, or the dish in progress when no timer is left: pinned on every tab */}
         {!isCookingVisible ? <FloatingTimerWidget onPress={reopenTimerStep} onOpenSession={() => setIsCookingVisible(true)} onEndSession={handleEndSession} bottomOffset={100} /> : null}
