@@ -1,6 +1,5 @@
-# CookFlow - ERD và kiến trúc hệ thống
+# CookFlow - Kiến trúc hệ thống
 
-- [ERD PlantUML](./cookflow-erd.puml)
 - [Kiến trúc hệ thống PlantUML](./cookflow-system-architecture.puml)
 
 ## Cách hiểu kiến trúc
@@ -24,10 +23,10 @@
 
 Hợp đồng API chi tiết (hàm nào của app gọi endpoint nào): `docs/FE_INTEGRATION.md` trong repo backend.
 
-## Cách hiểu ERD
+## Mô hình dữ liệu
 
-ERD là mô hình logic của miền dữ liệu. Trên backend, mỗi thực thể là một collection MongoDB (User, Category, Recipe
+Trên backend, mỗi thực thể là một collection MongoDB (User, Category, Recipe
 với nguyên liệu/bước nấu nhúng bên trong, Favorite, ShoppingItem, PantryItem, CookHistory, MealEntry, RecipeRequest);
 quan hệ được thể hiện bằng tham chiếu ObjectId. Timer và phiên nấu chỉ tồn tại trên thiết bị.
 
-Mở file `.puml` bằng PlantUML hoặc extension PlantUML trong VS Code để render.
+Mở file `.puml` kiến trúc bằng PlantUML hoặc extension PlantUML trong VS Code để render.
