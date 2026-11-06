@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform, TextInput } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Animated, Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform, TextInput } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { BlurTargetView, BlurView } from 'expo-blur';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { TimerCircle } from './ui/TimerCircle';
 import { StepVideoPlayer } from './ui/StepVideoPlayer';
@@ -15,12 +17,16 @@ import { scaleAmount } from '../utils/quantity';
 import { pantryItemsUsedBy } from '../utils/pantry';
 import { NOTE_MAX_LENGTH } from '../utils/history';
 const KEEP_AWAKE_TAG = 'cookflow-cooking-mode';
+const COUNTDOWN_SECONDS = 5;
 const pad2 = n => String(n).padStart(2, '0');
-// The step being cooked lives in the context's cooking session (persisted), not in this screen
+// The step being cooked lives in the context's cooking session (persisted), not in this screen.
+// `countdown`: a new cooking session starts with a 5-second "get ready" screen; resuming does not.
 export const CookingModeModal = ({
   recipe,
   visible,
-  onClose
+  onClose,
+  countdown = false,
+  onCountdownDone
 }) => {
   const {
     timers, getStepTimer, clearRecipeTimers, settings,
@@ -31,10 +37,22 @@ export const CookingModeModal = ({
   const [rating, setRating] = useState(0);
   const [note, setNote] = useState('');
   const [isCelebrationVisible, setIsCelebrationVisible] = useState(false);
-  const [viewMode, setViewMode] = useState('video');
+  // Timer on demand for a step that has none in the recipe
+  const [showCustomTimer, setShowCustomTimer] = useState(false);
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
-  const [voiceEnabled, setVoiceEnabled] = useState(false);
-  const lastAutoSpokenStep = useRef(null);
+  // Each step is read aloud automatically the first time it is shown in a cooking session
+  // ("Nghe lại" reads it again); the header button turns that off / on
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const spokenSteps = useRef(new Set());
+  // True while a step is being read (enables "Dừng đọc")
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [countLeft, setCountLeft] = useState(COUNTDOWN_SECONDS);
+  const countScale = useRef(new Animated.Value(1)).current;
+  // Android blurs only what is inside a BlurTargetView: the whole cooking screen
+  const blurTargetRef = useRef(null);
+  // The modal draws under the status / navigation bars: the header and the footer extend behind
+  // them (same white), instead of Android painting two grey bands
+  const insets = useSafeAreaInsets();
   const [showIngredients, setShowIngredients] = useState(false);
   // Pantry entries the user marks as used up when the dish is done
   const [usedUp, setUsedUp] = useState({});
@@ -45,23 +63,31 @@ export const CookingModeModal = ({
   const isLastStep = safeStepIndex === totalSteps - 1;
   const recipeTimers = timers.filter(timer => timer.recipeId === recipe?.id);
   const currentStepTimer = recipe && currentStep ? getStepTimer(recipe.id, currentStep.id) : null;
+  // Recipe timer, a timer the user added, or one still counting for this step (e.g. after coming back)
+  const showTimer = !!(currentStep?.timerSeconds || showCustomTimer || currentStepTimer);
   // Servings chosen on the detail screen: ingredient amounts and the AI follow them
   const servings = cookingSession?.servings ?? recipe?.servings ?? 1;
   const ratio = servings / Math.max(1, recipe?.servings || 1);
   const usedPantryItems = useMemo(() => recipe ? pantryItemsUsedBy(recipe, pantryIngredients) : [], [recipe, pantryIngredients]);
   useEffect(() => {
-    setVoiceEnabled(false);
+    setVoiceEnabled(true);
     setIsCelebrationVisible(false);
-    setViewMode('video');
+    setShowCustomTimer(false);
     setShowIngredients(false);
     setUsedUp({});
     setRating(0);
     setNote('');
   }, [recipe?.id]);
-  // Optional custom timer tab only applies to the step where it was opened
+  // A timer added on demand only applies to the step where it was added
   useEffect(() => {
-    setViewMode('video');
+    setShowCustomTimer(false);
   }, [safeStepIndex]);
+  // Every step (and every return to Cooking Mode) starts on its instructions + timer, even if the
+  // user had scrolled down to the ingredients or the video
+  const scrollRef = useRef(null);
+  useEffect(() => {
+    if (visible) scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [visible, safeStepIndex, recipe?.id]);
   // Keep the screen on while cooking (setting in Cài đặt)
   useEffect(() => {
     if (!visible || !settings.keepAwake || Platform.OS === 'web') return undefined;
@@ -70,23 +96,54 @@ export const CookingModeModal = ({
       Promise.resolve().then(() => deactivateKeepAwake(KEEP_AWAKE_TAG)).catch(() => {});
     };
   }, [visible, settings.keepAwake]);
+  // A new session (new startedAt) reads every step again; leaving and coming back does not
   useEffect(() => {
-    if (visible && voiceEnabled && currentStep) {
-      const stepKey = `${recipe.id}:${safeStepIndex}`;
-      if (lastAutoSpokenStep.current === stepKey) return;
-      lastAutoSpokenStep.current = stepKey;
-      Speech.stop();
-      Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, { language: 'vi-VN' });
+    spokenSteps.current = new Set();
+  }, [cookingSession?.startedAt]);
+
+  // 5-second "get ready" countdown when a new cooking session starts. The parent re-renders every
+  // timer tick, so its callback is read through a ref: the countdown never restarts on a re-render.
+  const countdownDoneRef = useRef(onCountdownDone);
+  countdownDoneRef.current = onCountdownDone;
+  // Reset while no countdown runs, so the next one always starts from 5 (resetting when it starts
+  // would race with the effect below, which would still see the last countdown's 0 and end at once)
+  useEffect(() => {
+    if (!countdown) setCountLeft(COUNTDOWN_SECONDS);
+  }, [countdown]);
+  useEffect(() => {
+    if (!visible || !countdown) return undefined;
+    if (countLeft <= 0) {
+      countdownDoneRef.current?.();
+      return undefined;
     }
+    countScale.setValue(1.35);
+    Animated.spring(countScale, { toValue: 1, friction: 5, useNativeDriver: true }).start();
+    const tick = setTimeout(() => setCountLeft(left => left - 1), 1000);
+    return () => clearTimeout(tick);
+  }, [visible, countdown, countLeft, countScale]);
+
+  const stepKey = recipe && currentStep ? `${recipe.id}:${currentStep.id}` : null;
+  const speakStep = () => {
+    if (!currentStep) return;
+    spokenSteps.current.add(stepKey);
+    Speech.stop();
+    const quiet = () => setIsSpeaking(false);
+    Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, {
+      language: 'vi-VN',
+      onStart: () => setIsSpeaking(true),
+      onDone: quiet,
+      onStopped: quiet,
+      onError: quiet
+    });
+  };
+  // Auto-read a step the first time it is shown (after the countdown)
+  useEffect(() => {
+    if (!visible || countdown || !voiceEnabled || !currentStep || spokenSteps.current.has(stepKey)) return undefined;
+    speakStep();
     return () => { Speech.stop(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, voiceEnabled, recipe?.id, safeStepIndex]);
-  const speakCurrentStep = () => {
-    if (!currentStep) return;
-    lastAutoSpokenStep.current = `${recipe.id}:${safeStepIndex}`;
-    Speech.stop();
-    Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, { language: 'vi-VN' });
-  };
+  }, [visible, countdown, voiceEnabled, stepKey]);
+  const speakCurrentStep = speakStep;
   const toggleVoice = () => {
     if (voiceEnabled) {
       Speech.stop();
@@ -131,7 +188,7 @@ export const CookingModeModal = ({
       title: 'Tạm rời chế độ nấu?',
       message: activeTimers.length
         ? `${activeTimers.map(timer => `Timer "${timer.stepTitle}" (${formatTimer(timer.secondsLeft)})`).join(', ')} vẫn tiếp tục chạy. Bạn có thể mở lại từ thanh timer ở màn hình chính.`
-        : `Tiến độ (bước ${safeStepIndex + 1}/${totalSteps}) được lưu lại, kể cả khi tắt ứng dụng. Mở lại từ thẻ "Đang nấu dở" ở màn hình chính.`,
+        : `Tiến độ (bước ${safeStepIndex + 1}/${totalSteps}) được lưu lại, kể cả khi tắt ứng dụng. Mở lại từ thanh "Đang nấu dở" phía trên thanh menu.`,
       confirmText: 'Rời đi',
       cancelText: 'Tiếp tục nấu',
       onConfirm: () => {
@@ -152,35 +209,39 @@ export const CookingModeModal = ({
     endCookingSession();
     onClose();
   };
-  return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} onRequestClose={handleExit}>
-      <SafeAreaView style={styles.container}>
-        {/* Precision Header with Hairline Progress */}
-        <View style={styles.header}>
+  return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} statusBarTranslucent navigationBarTranslucent onRequestClose={handleExit}>
+      <StatusBar style="dark" />
+      <View style={styles.root}>
+      <BlurTargetView ref={blurTargetRef} style={styles.root}>
+      <SafeAreaView edges={['left', 'right']} style={styles.container}>
+        {/* Header: close · step + progress (flexible, never overflows) · voice · AI */}
+        <View style={[styles.header, { paddingTop: insets.top + Spacing.sm }]}>
           <View style={styles.headerTopRow}>
-            <Pressable onPress={handleExit} style={styles.exitButton}>
-              <Text style={styles.exitText}>✕ ĐÓNG</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Đóng chế độ nấu" hitSlop={6} onPress={handleExit} style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}>
+              <Text style={styles.iconButtonText}>✕</Text>
             </Pressable>
 
-            <Pressable onPress={toggleVoice} style={styles.exitButton}>
-              <Text style={styles.exitText}>{voiceEnabled ? '🔊 TẮT ĐỌC' : '🔊 ĐỌC TỰ ĐỘNG'}</Text>
+            <View style={styles.headerCenter}>
+              <View style={styles.phaseRow}>
+                <View style={styles.livePulse} />
+                <Text style={styles.phaseText} numberOfLines={1}>
+                  BƯỚC {pad2(safeStepIndex + 1)} / {pad2(totalSteps)}
+                  <Text style={styles.percentText}>  ·  {progressPercent}%</Text>
+                </Text>
+              </View>
+              <Text style={styles.headerRecipe} numberOfLines={1}>{recipe.title}</Text>
+            </View>
+
+            <Pressable accessibilityRole="switch" accessibilityState={{ checked: voiceEnabled }} accessibilityLabel={voiceEnabled ? 'Tắt đọc tự động' : 'Bật đọc tự động'} hitSlop={6} onPress={toggleVoice} style={({ pressed }) => [styles.iconButton, voiceEnabled && styles.iconButtonOn, pressed && styles.iconButtonPressed]}>
+              <Text style={styles.iconButtonText}>{voiceEnabled ? '🔊' : '🔇'}</Text>
             </Pressable>
 
-            <View style={styles.phaseBadge}>
-              <View style={styles.livePulse} />
-              <Text style={styles.phaseText}>
-                GIAI ĐOẠN {pad2(safeStepIndex + 1)} // {pad2(totalSteps)}
-              </Text>
-            </View>
-
-            <View style={styles.headerRight}>
-              <Pressable onPress={() => setIsAiChatVisible(true)} style={styles.aiButton}>
-                <Text style={styles.aiButtonText}>🤖 AI</Text>
-              </Pressable>
-              <Text style={styles.percentText}>{progressPercent}%</Text>
-            </View>
+            <Pressable accessibilityRole="button" accessibilityLabel="Hỏi trợ lý AI" hitSlop={6} onPress={() => setIsAiChatVisible(true)} style={({ pressed }) => [styles.aiButton, pressed && styles.iconButtonPressed]}>
+              <Text style={styles.aiButtonText}>🤖 AI</Text>
+            </Pressable>
           </View>
 
-          {/* Hairline Progress Track */}
+          {/* Progress Track */}
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, {
             width: `${progressPercent}%`
@@ -188,27 +249,60 @@ export const CookingModeModal = ({
           </View>
         </View>
 
-        {/* Step Content */}
-        <ScrollView style={{
+        {/* Step Content: what to do now (instructions + timer) first; ingredients and video below */}
+        <ScrollView ref={scrollRef} style={{
         flex: 1,
         width: '100%'
       }} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-          {/* Step Video Player Component */}
-          <StepVideoPlayer key={`video_${recipe.id}_step_${currentStep.stepNumber}`} videoUrl={currentStep.videoUrl || recipe.videoUrl} fallbackImage={currentStep.image || recipe.imageUrl} stepNumber={currentStep.stepNumber} stepTitle={currentStep.title} />
-
-          {/* View Mode Switcher: Video vs Timer */}
-          <View style={styles.modeSwitcher}>
-            <Pressable onPress={() => setViewMode('video')} style={[styles.modeBtn, viewMode === 'video' && styles.modeBtnActive]}>
-              <Text style={[styles.modeBtnText, viewMode === 'video' && styles.modeBtnTextActive]}>
-                📝 HƯỚNG DẪN CHI TIẾT
+          {/* Main Step Card */}
+          <View style={styles.stepCard}>
+            <View style={styles.stepMetaRow}>
+              <Text style={styles.recipeCodeTitle}>
+                {recipe.title.toUpperCase()}
               </Text>
-            </Pressable>
+              <Text style={styles.stepSeq}>BƯỚC #{currentStep.stepNumber}</Text>
+            </View>
 
-            <Pressable onPress={() => setViewMode('timer')} style={[styles.modeBtn, viewMode === 'timer' && styles.modeBtnActive]}>
-              <Text style={[styles.modeBtnText, viewMode === 'timer' && styles.modeBtnTextActive]}>
-                ⏱ ĐẾM GIỜ BƯỚC NÀY {currentStep.timerSeconds ? `(${Math.floor(currentStep.timerSeconds / 60)}P)` : ''}
-              </Text>
-            </Pressable>
+            <Text style={styles.stepTitle}>{currentStep.title}</Text>
+            <Text style={styles.stepInstruction}>{currentStep.instruction}</Text>
+            <View style={styles.voiceRow}>
+              <Pressable accessibilityRole="button" accessibilityState={{ disabled: !isSpeaking }} disabled={!isSpeaking} onPress={() => { Speech.stop(); setIsSpeaking(false); setVoiceEnabled(false); }} style={({ pressed }) => [styles.voiceControl, !isSpeaking && styles.voiceControlIdle, pressed && styles.iconButtonPressed]}>
+                <Text style={styles.voiceControlIcon}>⏹</Text>
+                <Text style={styles.voiceControlText}>Dừng đọc</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" onPress={speakCurrentStep} style={({ pressed }) => [styles.voiceControl, styles.voiceControlPrimary, pressed && styles.iconButtonPressed]}>
+                <Text style={styles.voiceControlIcon}>🔁</Text>
+                <Text style={[styles.voiceControlText, styles.voiceControlTextPrimary]}>Nghe lại</Text>
+              </Pressable>
+            </View>
+
+            {/* A step without a timer in the recipe can still get one, on demand */}
+            {!showTimer ? <Pressable accessibilityRole="button" onPress={() => setShowCustomTimer(true)} style={({ pressed }) => [styles.addTimerBtn, pressed && { opacity: 0.8 }]}>
+                <Text style={styles.addTimerText}>⏱ Thêm hẹn giờ cho bước này</Text>
+              </Pressable> : null}
+
+            {/* Mẹo nhỏ (Tip) */}
+            {currentStep.tip ? <View style={styles.tipBox}>
+                <View style={styles.tipHeader}>
+                  <Text style={styles.tipTag}>GHI CHÚ HƯỚNG DẪN // KINH NGHIỆM ĐẦU BẾP</Text>
+                </View>
+                <Text style={styles.tipText}>{currentStep.tip}</Text>
+              </View> : null}
+
+            {/* Step timer: the recipe's own, or one the user added (always shown while it exists) */}
+            {showTimer ? <View style={styles.timerSection}>
+                <View style={styles.timerSectionHeader}>
+                  <View style={styles.timerSectionDot} />
+                  <Text style={styles.timerSectionTitle}>
+                    {currentStep.timerSeconds ? 'BỘ ĐẾM GIỜ CHUẨN XÁC CHO GIAI ĐOẠN NÀY' : 'HẸN GIỜ TỰ CHỌN CHO BƯỚC NÀY'}
+                  </Text>
+                  {!currentStep.timerSeconds && !currentStepTimer ? <Pressable accessibilityRole="button" accessibilityLabel="Ẩn hẹn giờ" hitSlop={8} onPress={() => setShowCustomTimer(false)}>
+                      <Text style={styles.hideTimerText}>Ẩn</Text>
+                    </Pressable> : null}
+                </View>
+
+                <TimerCircle key={`timer_${recipe.id}_${safeStepIndex}`} recipe={recipe} stepIndex={safeStepIndex} defaultSeconds={currentStep.timerSeconds || 180} />
+              </View> : null}
           </View>
 
           {/* Ingredients scaled to the servings being cooked */}
@@ -228,41 +322,9 @@ export const CookingModeModal = ({
                 </Text> : null}
             </View> : null}
 
-          {/* Main Step Card */}
-          <View style={styles.stepCard}>
-            <View style={styles.stepMetaRow}>
-              <Text style={styles.recipeCodeTitle}>
-                {recipe.title.toUpperCase()}
-              </Text>
-              <Text style={styles.stepSeq}>BƯỚC #{currentStep.stepNumber}</Text>
-            </View>
-
-            <Text style={styles.stepTitle}>{currentStep.title}</Text>
-            <Text style={styles.stepInstruction}>{currentStep.instruction}</Text>
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-              <Pressable onPress={() => { Speech.stop(); setVoiceEnabled(false); }} style={styles.voiceControl}><Text style={styles.voiceControlText}>Dừng đọc</Text></Pressable>
-              <Pressable onPress={speakCurrentStep} style={styles.voiceControl}><Text style={styles.voiceControlText}>Nghe lại</Text></Pressable>
-            </View>
-
-            {/* Mẹo nhỏ (Tip) */}
-            {currentStep.tip ? <View style={styles.tipBox}>
-                <View style={styles.tipHeader}>
-                  <Text style={styles.tipTag}>GHI CHÚ HƯỚNG DẪN // KINH NGHIỆM ĐẦU BẾP</Text>
-                </View>
-                <Text style={styles.tipText}>{currentStep.tip}</Text>
-              </View> : null}
-
-            {/* Bộ đếm giờ Timer đếm ngược (nếu bước có timerSeconds hoặc user chọn tab timer) */}
-            {currentStep.timerSeconds || viewMode === 'timer' ? <View style={styles.timerSection}>
-                <View style={styles.timerSectionHeader}>
-                  <View style={styles.timerSectionDot} />
-                  <Text style={styles.timerSectionTitle}>
-                    BỘ ĐẾM GIỜ CHUẨN XÁC CHO GIAI ĐOẠN NÀY
-                  </Text>
-                </View>
-
-                <TimerCircle key={`timer_${recipe.id}_${safeStepIndex}`} recipe={recipe} stepIndex={safeStepIndex} defaultSeconds={currentStep.timerSeconds || 180} />
-              </View> : null}
+          {/* Step Video Player Component */}
+          <View style={styles.videoSection}>
+            <StepVideoPlayer key={`video_${recipe.id}_step_${currentStep.stepNumber}`} videoUrl={currentStep.videoUrl || recipe.videoUrl} fallbackImage={currentStep.image || recipe.imageUrl} stepNumber={currentStep.stepNumber} stepTitle={currentStep.title} />
           </View>
 
           <View style={{
@@ -271,7 +333,7 @@ export const CookingModeModal = ({
         </ScrollView>
 
         {/* Bottom Navigation Dock */}
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: insets.bottom + Spacing.md }]}>
           <Pressable onPress={handlePrev} disabled={safeStepIndex === 0} style={[styles.navBtn, styles.prevBtn, safeStepIndex === 0 && styles.btnDisabled]}>
             <Text style={styles.prevBtnText}>‹ BƯỚC TRƯỚC</Text>
           </Pressable>
@@ -335,12 +397,72 @@ export const CookingModeModal = ({
 
         <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={recipe} currentStep={currentStep} servings={servings} />
       </SafeAreaView>
+      </BlurTargetView>
+
+      {/* "Get ready" countdown of a new cooking session: one big number over the blurred cooking screen */}
+      {/* Our own absolute layer: BlurView only paints the background (its own style is not relied on) */}
+      {countdown ? <View style={styles.countdownOverlay}>
+          <BlurView blurTarget={blurTargetRef} blurMethod="dimezisBlurViewSdk31Plus" intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
+          <Animated.Text accessibilityLiveRegion="polite" style={[styles.countdownNumber, { transform: [{ scale: countScale }] }]}>
+            {Math.max(countLeft, 1)}
+          </Animated.Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Bỏ qua đếm ngược" onPress={() => countdownDoneRef.current?.()} style={({ pressed }) => [styles.countdownSkip, pressed && { opacity: 0.8 }]}>
+            <Text style={styles.countdownSkipText}>Bỏ qua ›</Text>
+          </Pressable>
+        </View> : null}
+      </View>
     </Modal>;
 };
 const styles = StyleSheet.create({
+  videoSection: {
+    marginTop: 16
+  },
+  root: {
+    flex: 1
+  },
+  countdownOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 30,
+    elevation: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Android "none" blur fallback / web: still dims the screen behind
+    backgroundColor: 'rgba(0,0,0,0.25)'
+  },
+  countdownNumber: {
+    color: '#FFFFFF',
+    fontSize: 200,
+    lineHeight: 220,
+    fontWeight: '900',
+    fontVariant: ['tabular-nums'],
+    textShadowColor: 'rgba(0,0,0,0.35)',
+    textShadowOffset: { width: 0, height: 4 },
+    textShadowRadius: 16
+  },
+  countdownSkip: {
+    position: 'absolute',
+    bottom: 72,
+    minHeight: 48,
+    paddingHorizontal: 32,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  countdownSkipText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800'
+  },
   ingredientsToggle: {
     minHeight: 44,
-    marginTop: 12,
+    marginTop: 16,
     paddingHorizontal: 16,
     borderRadius: Radius.md,
     backgroundColor: HeronColors.card,
@@ -480,35 +602,79 @@ const styles = StyleSheet.create({
   headerTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingBottom: 14
+    gap: 10,
+    paddingBottom: 12
   },
-  exitButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: Radius.full,
+  iconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: HeronColors.cardAlt,
     borderWidth: 1,
-    borderColor: HeronColors.border
+    borderColor: HeronColors.border,
+    alignItems: 'center',
+    justifyContent: 'center'
   },
-  exitText: {
-    fontSize: 11,
+  iconButtonOn: {
+    backgroundColor: HeronColors.brandLight,
+    borderColor: '#FFD8CF'
+  },
+  iconButtonPressed: {
+    opacity: 0.7
+  },
+  iconButtonText: {
+    fontSize: 16,
     fontWeight: '800',
-    color: HeronColors.secondary,
-    letterSpacing: 0.5
+    color: HeronColors.primary
   },
-  voiceControl: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: Radius.full, backgroundColor: HeronColors.cardAlt },
-  voiceControlText: { color: HeronColors.primary, fontSize: 12, fontWeight: '700' },
-  phaseBadge: {
+  headerCenter: {
+    flex: 1,
+    minWidth: 0
+  },
+  phaseRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.full,
-    backgroundColor: HeronColors.cardAlt,
+    gap: 6
+  },
+  headerRecipe: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '600',
+    color: HeronColors.granite
+  },
+  voiceRow: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  voiceControl: {
+    flex: 1,
+    height: 44,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: HeronColors.borderLight
+    borderColor: HeronColors.border,
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8
+  },
+  voiceControlIdle: {
+    opacity: 0.45
+  },
+  voiceControlPrimary: {
+    backgroundColor: HeronColors.brandLight,
+    borderColor: '#FFD8CF'
+  },
+  voiceControlIcon: {
+    fontSize: 15
+  },
+  voiceControlText: {
+    color: HeronColors.primary,
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  voiceControlTextPrimary: {
+    color: HeronColors.brand
   },
   livePulse: {
     width: 6,
@@ -517,19 +683,16 @@ const styles = StyleSheet.create({
     backgroundColor: HeronColors.brand
   },
   phaseText: {
-    fontSize: 11,
+    flexShrink: 1,
+    fontSize: 13,
     fontWeight: '900',
     color: HeronColors.primary,
-    letterSpacing: 0.8
-  },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8
+    letterSpacing: 0.6
   },
   aiButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    height: 40,
+    paddingHorizontal: 14,
+    justifyContent: 'center',
     borderRadius: Radius.full,
     backgroundColor: HeronColors.brandLight,
     borderWidth: 1,
@@ -542,18 +705,21 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4
   },
   percentText: {
-    fontSize: 12,
     fontWeight: '900',
     color: HeronColors.brand,
     fontVariant: ['tabular-nums']
   },
   progressTrack: {
-    height: 3,
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
     backgroundColor: HeronColors.borderLight,
-    width: '100%'
+    width: '100%',
+    marginBottom: 10
   },
   progressFill: {
     height: '100%',
+    borderRadius: 2,
     backgroundColor: HeronColors.brand
   },
   scrollContent: {
@@ -561,34 +727,28 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'stretch'
   },
-  modeSwitcher: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
+  addTimerBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 14,
+    minHeight: 40,
+    paddingHorizontal: 16,
     borderRadius: Radius.full,
-    padding: 3,
     borderWidth: 1,
-    borderColor: HeronColors.border,
-    marginBottom: 16,
-    width: '100%'
-  },
-  modeBtn: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: Radius.full,
+    borderColor: HeronColors.brand,
+    backgroundColor: '#FFF4F0',
     alignItems: 'center',
     justifyContent: 'center'
   },
-  modeBtnActive: {
-    backgroundColor: HeronColors.primary
+  addTimerText: {
+    color: HeronColors.brand,
+    fontSize: 13,
+    fontWeight: '800'
   },
-  modeBtnText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: HeronColors.surface,
-    letterSpacing: 0.5
-  },
-  modeBtnTextActive: {
-    color: '#FFFFFF'
+  hideTimerText: {
+    marginLeft: 'auto',
+    color: HeronColors.granite,
+    fontSize: 12,
+    fontWeight: '700'
   },
   stepCard: {
     width: '100%',
@@ -637,7 +797,7 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 1,
     borderColor: HeronColors.border,
-    marginBottom: 18
+    marginTop: 16
   },
   tipHeader: {
     marginBottom: 4
@@ -654,9 +814,7 @@ const styles = StyleSheet.create({
     color: HeronColors.primary
   },
   timerSection: {
-    borderTopWidth: 1,
-    borderTopColor: HeronColors.borderLight,
-    paddingTop: 16,
+    marginTop: 24,
     alignItems: 'center'
   },
   timerSectionHeader: {

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HeronColors, HeronShadow, Radius, Spacing } from '../constants/theme';
 import { useRecipes } from '../context/RecipeContext';
 import { AppleButton } from './ui/AppleButton';
@@ -21,7 +22,7 @@ const fmt = n => Math.round(n).toLocaleString('vi-VN');
 export const MealPlanScreen = ({ onSelectRecipe }) => {
   const {
     mealPlan, cookHistory, getRecipeById, settings, addMealEntry, toggleMealEaten,
-    deleteMealEntry, copyMealDay, addPlanToShopping
+    deleteMealEntry, copyMealDay, addPlanToShopping, addToShoppingList
   } = useRecipes();
   const today = dateKey();
   const [selected, setSelected] = useState(today);
@@ -48,21 +49,27 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
   const canGoForward = week[6] < maxDay;
   const progress = goalProgress(kcal.eaten, goal);
   const plannedProgress = goalProgress(kcal.eaten + kcal.planned, goal);
+  // kcal compared with the goal: eaten (past / today) or planned (future)
+  const dayTotal = kind === 'future' ? kcal.planned : kcal.eaten;
+  const over = dayTotal > goal;
 
-  const handleShopping = () => {
+  const handleShopping = async () => {
     const from = selected < today ? today : selected;
     const to = week[6];
-    const { added, merged, dishes } = addPlanToShopping(from, to);
+    const result = await addPlanToShopping(from, to);
+    if (!result) return;
+    const { added, merged, dishes } = result;
     if (!dishes) {
       showAlert('Chưa có món nào để mua', `Từ ${dayTitle(from, today).toLowerCase()} đến hết ${shortDate(to)} chưa có món kế hoạch (từ công thức) nào.`);
       return;
     }
     showAlert('Đã cập nhật giỏ đi chợ 🛒', `${dishes} món trong kế hoạch • thêm ${added} • cộng dồn ${merged} nguyên liệu.`);
   };
-  const handleCopyToTomorrow = () => {
+  const handleCopyToTomorrow = async () => {
     const target = addDays(selected, 1);
     if (target > maxDay) return;
-    const count = copyMealDay(selected, target);
+    const count = await copyMealDay(selected, target);
+    if (count === null) return;
     if (count) showAlert('Đã sao chép', `${count} món được thêm vào ${dayTitle(target, today).toLowerCase()}.`);
     else showAlert('Không có gì để sao chép', 'Ngày này chưa có món nào được thêm thủ công.');
   };
@@ -89,7 +96,7 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
             {meal.recipeId && !recipe ? ' • món đã bị xóa' : ''}
           </Text>
         </View>
-        {!meal.fromHistory ? <Pressable accessibilityLabel={`Xóa ${meal.title}`} hitSlop={8} onPress={() => handleDelete(meal)}>
+        {!meal.fromHistory ? <Pressable accessibilityLabel={`Xóa ${meal.title}`} hitSlop={8} onPress={() => handleDelete(meal)} style={({ pressed }) => [styles.removeBtn, pressed && { opacity: 0.6 }]}>
             <Text style={styles.remove}>✕</Text>
           </Pressable> : null}
       </Pressable>;
@@ -98,16 +105,20 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
   return <View style={{ flex: 1 }}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.tag}>NHẬT KÝ // KẾ HOẠCH BỮA ĂN</Text>
-          <Text style={styles.title}>Lịch ăn</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.tag}>NHẬT KÝ // KẾ HOẠCH BỮA ĂN</Text>
+            <Text style={styles.title}>Lịch ăn</Text>
+          </View>
+          {selected !== today ? <Pressable accessibilityRole="button" onPress={() => setSelected(today)} style={({ pressed }) => [styles.todayBtn, pressed && { opacity: 0.7 }]}>
+              <Text style={styles.todayText}>Hôm nay</Text>
+            </Pressable> : null}
         </View>
 
-        {/* Week strip */}
+        {/* Week strip: ‹ range › */}
         <View style={styles.weekNav}>
-          <Pressable accessibilityLabel="Tuần trước" hitSlop={8} onPress={() => setSelected(addDays(selected, -7))} style={styles.navBtn}><Text style={styles.navText}>‹</Text></Pressable>
+          <Pressable accessibilityLabel="Tuần trước" hitSlop={8} onPress={() => setSelected(addDays(selected, -7))} style={({ pressed }) => [styles.navBtn, pressed && { opacity: 0.6 }]}><Text style={styles.navText}>‹</Text></Pressable>
           <Text style={styles.weekLabel}>{shortDate(week[0])} – {shortDate(week[6])}</Text>
-          <Pressable accessibilityLabel="Tuần sau" disabled={!canGoForward} hitSlop={8} onPress={() => setSelected(addDays(selected, 7) > maxDay ? maxDay : addDays(selected, 7))} style={[styles.navBtn, !canGoForward && { opacity: 0.3 }]}><Text style={styles.navText}>›</Text></Pressable>
-          {selected !== today ? <Pressable onPress={() => setSelected(today)} style={styles.todayBtn}><Text style={styles.todayText}>Hôm nay</Text></Pressable> : null}
+          <Pressable accessibilityLabel="Tuần sau" disabled={!canGoForward} hitSlop={8} onPress={() => setSelected(addDays(selected, 7) > maxDay ? maxDay : addDays(selected, 7))} style={({ pressed }) => [styles.navBtn, !canGoForward && { opacity: 0.3 }, pressed && { opacity: 0.6 }]}><Text style={styles.navText}>›</Text></Pressable>
         </View>
         <View style={styles.weekRow}>
           {week.map(day => {
@@ -115,7 +126,7 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
             const info = weekKcal[day];
             const isToday = day === today;
             const disabled = day > maxDay;
-            return <Pressable key={day} disabled={disabled} accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={`${dayTitle(day, today)}, ${info.count} món`} onPress={() => setSelected(day)} style={[styles.dayChip, active && styles.dayChipActive, disabled && { opacity: 0.3 }]}>
+            return <Pressable key={day} disabled={disabled} accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={`${dayTitle(day, today)}, ${info.count} món`} onPress={() => setSelected(day)} style={[styles.dayChip, isToday && !active && styles.dayChipToday, active && styles.dayChipActive, disabled && { opacity: 0.3 }]}>
                 <Text style={[styles.dayName, active && styles.dayTextActive]}>{weekdayLabel(day)}</Text>
                 <Text style={[styles.dayNum, active && styles.dayTextActive, isToday && !active && { color: HeronColors.brand }]}>{Number(day.slice(8))}</Text>
                 <View style={[styles.dayDot, info.count ? (day < today || info.eaten ? styles.dotEaten : styles.dotPlanned) : null, active && info.count ? { backgroundColor: '#FFFFFF' } : null]} />
@@ -139,12 +150,26 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
             <View style={[styles.fillPlanned, { width: `${Math.min(100, Math.round(plannedProgress * 100))}%` }]} />
             <View style={[styles.fill, progress > 1 && styles.fillOver, { width: `${Math.min(100, Math.round(progress * 100))}%` }]} />
           </View>
-          <Text style={styles.summaryHint}>
-            {kind === 'future'
-              ? (kcal.planned > goal ? `Kế hoạch vượt mục tiêu ${fmt(kcal.planned - goal)} kcal.` : `Còn trống ~${fmt(goal - kcal.planned)} kcal so với mục tiêu.`)
-              : (kcal.eaten > goal ? `Vượt mục tiêu ${fmt(kcal.eaten - goal)} kcal.` : `Còn ${fmt(goal - kcal.eaten)} kcal so với mục tiêu ngày.`)}
-            {' '}7 ngày qua: ghi nhận {recent.days}/7 ngày{recent.days ? `, TB ${fmt(recent.avg)} kcal/ngày` : ''}.
-          </Text>
+          {kind === 'today' ? <View style={styles.legend}>
+              <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: HeronColors.emerald }]} /><Text style={styles.legendText}>Đã ăn</Text></View>
+              <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#FFD2C2' }]} /><Text style={styles.legendText}>Dự kiến</Text></View>
+            </View> : null}
+
+          {/* Three numbers instead of a sentence */}
+          <View style={styles.statsRow}>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>{over ? (kind === 'future' ? 'Vượt kế hoạch' : 'Vượt mục tiêu') : (kind === 'future' ? 'Còn trống' : 'Còn lại')}</Text>
+              <Text style={[styles.statValue, over && { color: HeronColors.brand }]}>{fmt(Math.abs(goal - dayTotal))}<Text style={styles.statUnit}> kcal</Text></Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>7 ngày qua</Text>
+              <Text style={styles.statValue}>{recent.days}/7<Text style={styles.statUnit}> ngày</Text></Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>Trung bình</Text>
+              <Text style={styles.statValue}>{recent.days ? fmt(recent.avg) : '—'}<Text style={styles.statUnit}>{recent.days ? ' kcal' : ''}</Text></Text>
+            </View>
+          </View>
         </View>
 
         {/* Slots */}
@@ -153,19 +178,31 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
           const slotKcal = slotMeals.reduce((sum, meal) => sum + (meal.calories || 0), 0);
           return <View key={slot.id} style={styles.slotCard}>
               <View style={styles.slotHead}>
-                <Text style={styles.slotTitle}>{slot.icon}  {slot.label}</Text>
-                <Text style={styles.slotKcal}>{slotKcal ? `${fmt(slotKcal)} kcal` : ''}</Text>
+                <View style={styles.slotIcon}><Text style={styles.slotIconText}>{slot.icon}</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.slotTitle}>{slot.label}</Text>
+                  <Text style={styles.slotSub}>{slotMeals.length ? `${slotMeals.length} món${slotKcal ? ` • ${fmt(slotKcal)} kcal` : ''}` : 'Chưa có món'}</Text>
+                </View>
+                <Pressable accessibilityRole="button" accessibilityLabel={`${kind === 'past' ? 'Ghi món đã ăn' : 'Thêm món'} vào ${slot.label.toLowerCase()}`} onPress={() => setAddingSlot(slot.id)} style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}>
+                  <Text style={styles.addText}>＋ {kind === 'past' ? 'Ghi' : 'Thêm'}</Text>
+                </Pressable>
               </View>
-              {slotMeals.map(renderMeal)}
-              <Pressable accessibilityRole="button" onPress={() => setAddingSlot(slot.id)} style={styles.addRow}>
-                <Text style={styles.addText}>+ {kind === 'past' ? 'Ghi món đã ăn' : 'Thêm món'}</Text>
-              </Pressable>
+              {slotMeals.length ? <View style={styles.slotMeals}>{slotMeals.map(renderMeal)}</View> : null}
             </View>;
         })}
 
+        {/* Two side-by-side action cards, same look as the meal cards */}
         <View style={styles.actions}>
-          <AppleButton title="🛒 Mua nguyên liệu cho kế hoạch tuần" variant="outline" onPress={handleShopping} style={{ width: '100%' }} />
-          <AppleButton title="⧉ Sao chép thực đơn sang ngày hôm sau" variant="ghost" onPress={handleCopyToTomorrow} style={{ width: '100%' }} />
+          <Pressable accessibilityRole="button" onPress={handleShopping} style={({ pressed }) => [styles.actionCard, pressed && { opacity: 0.75 }]}>
+            <View style={[styles.actionIcon, { backgroundColor: HeronColors.brandLight }]}><Text style={styles.actionIconText}>🛒</Text></View>
+            <Text style={styles.actionTitle}>Mua nguyên liệu</Text>
+            <Text style={styles.actionSub}>cho kế hoạch tuần này</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={handleCopyToTomorrow} style={({ pressed }) => [styles.actionCard, pressed && { opacity: 0.75 }]}>
+            <View style={styles.actionIcon}><Text style={styles.actionIconText}>⧉</Text></View>
+            <Text style={styles.actionTitle}>Sao chép thực đơn</Text>
+            <Text style={styles.actionSub}>sang ngày hôm sau</Text>
+          </Pressable>
         </View>
         <View style={{ height: 150 }} />
       </ScrollView>
@@ -176,23 +213,54 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
         date={selected}
         isPast={kind === 'past'}
         onClose={() => setAddingSlot(null)}
-        onAdd={input => {
-          const entry = addMealEntry({ ...input, date: selected, slot: addingSlot });
-          if (!entry) return showAlert('Chưa thêm được', 'Hãy chọn một công thức hoặc nhập tên món.');
+        onAdd={async ({ shopping, ...input }) => {
+          const entry = await addMealEntry({ ...input, date: selected, slot: addingSlot });
+          if (entry === null) {
+            showAlert('Chưa thêm được', 'Hãy chọn một công thức hoặc nhập tên món.');
+            return false;
+          }
+          if (!entry) return false; // refused by the server, already reported
           setAddingSlot(null);
+          // A free dish has no recipe: what the user listed to buy for it goes to the shopping list
+          if (shopping?.length) {
+            const slotLabel = MEAL_SLOTS.find(s => s.id === addingSlot)?.label || '';
+            const result = await addToShoppingList(shopping, `${entry.title || input.title} (${slotLabel} ${shortDate(selected)})`.trim());
+            if (result) showAlert('Đã thêm vào kế hoạch', `${result.added + result.merged} nguyên liệu đã vào danh sách đi chợ${result.merged ? ` (${result.merged} gộp với dòng có sẵn)` : ''}.`);
+          }
+          return true;
         }}
       />
     </View>;
 };
 
-/** Picks a recipe (searchable) or a free-text dish with its own kcal. */
+const KCAL_PRESETS = [200, 350, 500, 700];
+const AMOUNT_PATTERN = /^\d+([.,]\d+)?(\/\d+)?$/;
+let itemSeq = 0;
+const emptyItem = () => {
+  itemSeq += 1;
+  return { key: `item_${itemSeq}`, name: '', amount: '', unit: '' };
+};
+
+/**
+ * Picks a recipe (searchable) or a free-text dish with its own kcal.
+ * A free dish has no recipe, so no ingredient list: when it is cooked at home, "Cần mua cho món này"
+ * lets the user list what to buy, which goes straight to the shopping list together with the plan.
+ * `onAdd(input)` resolves to true when the dish was added.
+ */
 const AddMealModal = ({ visible, slot, date, isPast, onClose, onAdd }) => {
   const { recipes, favoriteIds } = useRecipes();
+  const insets = useSafeAreaInsets();
+  // Android draws this sheet edge-to-edge (no grey status / navigation bands): pad it ourselves.
+  // iOS shows a page sheet that already sits below the status bar.
+  const padTop = Platform.OS === 'android' ? insets.top : 0;
+  const padBottom = Platform.OS === 'android' ? insets.bottom : 0;
   const [mode, setMode] = useState('recipe');
   const [query, setQuery] = useState('');
   const [freeTitle, setFreeTitle] = useState('');
   const [freeKcal, setFreeKcal] = useState('');
   const [servings, setServings] = useState(1);
+  const [items, setItems] = useState([]);
+  const [saving, setSaving] = useState(false);
   const slotInfo = MEAL_SLOTS.find(s => s.id === slot);
   const list = useMemo(() => {
     const filtered = recipes.filter(r => matchesSearch([r.title, r.category, ...(r.tags || [])], query));
@@ -205,79 +273,135 @@ const AddMealModal = ({ visible, slot, date, isPast, onClose, onAdd }) => {
     setFreeTitle('');
     setFreeKcal('');
     setServings(1);
+    setItems([]);
   };
   const close = () => {
     reset();
     onClose();
   };
+  const submit = async input => {
+    if (saving) return;
+    setSaving(true);
+    const added = await onAdd(input);
+    setSaving(false);
+    if (added) reset();
+  };
+  const updateItem = (key, patch) => setItems(list => list.map(item => item.key === key ? { ...item, ...patch } : item));
   const addFree = () => {
     const kcal = freeKcal.trim() ? parseIntInRange(freeKcal, 1, KCAL_MAX) : null;
+    if (!freeTitle.trim()) return showAlert('Thiếu tên món', 'Nhập tên món bạn đã / sẽ ăn.');
     if (freeKcal.trim() && kcal === null) return showAlert('Calo chưa hợp lệ', `Nhập số nguyên từ 1 đến ${KCAL_MAX}.`);
-    if (!freeTitle.trim()) return showAlert('Thiếu tên món', 'Nhập tên món bạn đã/ sẽ ăn.');
-    onAdd({ title: freeTitle, calories: kcal, servings: 1 });
-    reset();
+    const toBuy = isPast ? [] : items.filter(item => item.name.trim());
+    const badAmount = toBuy.find(item => item.amount.trim() && !AMOUNT_PATTERN.test(item.amount.trim()));
+    if (badAmount) return showAlert('Số lượng chưa hợp lệ', `"${badAmount.name.trim()}": nhập số như 2, 0,5 hoặc 1/2 — hoặc để trống.`);
+    return submit({
+      title: freeTitle,
+      calories: kcal,
+      servings: 1,
+      shopping: toBuy.map(item => ({ name: item.name.trim(), amount: item.amount.trim().replace(',', '.'), unit: item.unit.trim() }))
+    });
   };
-  return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={close}>
-      <KeyboardAvoidingView style={styles.modal} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+  const buyCount = items.filter(item => item.name.trim()).length;
+
+  return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
+      <KeyboardAvoidingView style={[styles.modal, { paddingTop: padTop }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.modalHead}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.tag}>{(slotInfo?.label || '').toUpperCase()} • {dayTitle(date).toUpperCase()}</Text>
+            <Text style={styles.tag}>{slotInfo?.icon} {(slotInfo?.label || '').toUpperCase()} • {dayTitle(date).toUpperCase()}</Text>
             <Text style={styles.modalTitle}>{isPast ? 'Ghi món đã ăn' : 'Thêm vào kế hoạch'}</Text>
           </View>
-          <Pressable accessibilityLabel="Đóng" onPress={close} style={styles.closeBtn}><Text style={styles.closeText}>✕</Text></Pressable>
+          <Pressable accessibilityLabel="Đóng" hitSlop={6} onPress={close} style={({ pressed }) => [styles.closeBtn, pressed && { opacity: 0.7 }]}><Text style={styles.closeText}>✕</Text></Pressable>
         </View>
+
         <View style={styles.segment}>
-          {[['recipe', 'Từ công thức'], ['free', 'Món tự nhập']].map(([id, label]) => <Pressable key={id} onPress={() => setMode(id)} style={[styles.segmentBtn, mode === id && styles.segmentActive]}>
+          {[['recipe', '📖  Từ công thức'], ['free', '✍️  Món tự nhập']].map(([id, label]) => <Pressable key={id} accessibilityRole="tab" accessibilityState={{ selected: mode === id }} onPress={() => setMode(id)} style={[styles.segmentBtn, mode === id && styles.segmentActive]}>
               <Text style={[styles.segmentText, mode === id && styles.segmentTextActive]}>{label}</Text>
             </Pressable>)}
         </View>
+
         {mode === 'recipe' ? <>
             <View style={styles.modalRow}>
-              <TextInput style={[styles.input, { flex: 1 }]} placeholder="Tìm món..." placeholderTextColor={HeronColors.disable} value={query} onChangeText={setQuery} autoCorrect={false} />
+              <View style={styles.searchBox}>
+                <Text style={styles.searchIcon}>⌕</Text>
+                <TextInput style={styles.searchInput} placeholder="Tìm món..." placeholderTextColor={HeronColors.disable} value={query} onChangeText={setQuery} autoCorrect={false} />
+              </View>
               <View style={styles.stepper}>
-                <Pressable accessibilityLabel="Giảm số phần" hitSlop={6} onPress={() => setServings(v => Math.max(1, v - 1))}><Text style={styles.stepperBtn}>−</Text></Pressable>
+                <Pressable accessibilityLabel="Giảm số phần" hitSlop={6} onPress={() => setServings(v => Math.max(1, v - 1))} style={styles.stepperBtnWrap}><Text style={styles.stepperBtn}>−</Text></Pressable>
                 <Text style={styles.stepperVal}>{servings} phần</Text>
-                <Pressable accessibilityLabel="Tăng số phần" hitSlop={6} onPress={() => setServings(v => Math.min(20, v + 1))}><Text style={styles.stepperBtn}>+</Text></Pressable>
+                <Pressable accessibilityLabel="Tăng số phần" hitSlop={6} onPress={() => setServings(v => Math.min(20, v + 1))} style={styles.stepperBtnWrap}><Text style={styles.stepperBtn}>+</Text></Pressable>
               </View>
             </View>
-            <ScrollView contentContainerStyle={{ paddingHorizontal: Spacing.lg, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-              {list.map(recipe => <Pressable key={recipe.id} onPress={() => {
-                onAdd({ recipe, servings });
-                reset();
-              }} style={styles.pickRow}>
+            <ScrollView contentContainerStyle={{ paddingHorizontal: Spacing.lg, paddingBottom: 40 + padBottom }} keyboardShouldPersistTaps="handled">
+              {list.map(recipe => <Pressable key={recipe.id} disabled={saving} onPress={() => submit({ recipe, servings })} style={({ pressed }) => [styles.pickCard, pressed && { opacity: 0.75 }]}>
+                  <Image source={{ uri: recipe.imageUrl }} style={styles.pickThumb} />
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.mealTitle} numberOfLines={1}>{favoriteIds.includes(recipe.id) ? '❤️ ' : ''}{recipe.title}</Text>
-                    <Text style={styles.mealMeta}>{recipe.category} • {recipe.calories ? `${recipe.calories} kcal/phần` : 'chưa có kcal'}</Text>
+                    <Text style={styles.pickTitle} numberOfLines={1}>{favoriteIds.includes(recipe.id) ? '❤️ ' : ''}{recipe.title}</Text>
+                    <Text style={styles.mealMeta} numberOfLines={1}>{recipe.category} • {recipe.calories ? `${recipe.calories} kcal/phần` : 'chưa có kcal'}</Text>
                   </View>
-                  <Text style={styles.pickPlus}>＋</Text>
+                  <View style={styles.pickPlus}><Text style={styles.pickPlusText}>＋</Text></View>
                 </Pressable>)}
               {!list.length ? <Text style={styles.empty}>Không tìm thấy món phù hợp.</Text> : null}
-              <Text style={styles.empty}>"{servings} phần" là số phần nấu — dùng khi đưa nguyên liệu vào giỏ đi chợ. Kcal được tính cho 1 người.</Text>
+              <Text style={styles.empty}>{`"${servings} phần" là số phần nấu — dùng khi đưa nguyên liệu vào giỏ đi chợ. Kcal được tính cho 1 người.`}</Text>
             </ScrollView>
-          </> : <ScrollView contentContainerStyle={{ padding: Spacing.lg }} keyboardShouldPersistTaps="handled">
-            <Text style={styles.label}>Tên món</Text>
-            <TextInput style={styles.input} placeholder="Ví dụ: Phở bò ngoài hàng" placeholderTextColor={HeronColors.disable} value={freeTitle} onChangeText={setFreeTitle} maxLength={80} />
-            <Text style={styles.label}>Calo ước tính (kcal, tùy chọn)</Text>
-            <TextInput style={styles.input} keyboardType="numeric" placeholder="Ví dụ: 450" placeholderTextColor={HeronColors.disable} value={freeKcal} onChangeText={setFreeKcal} />
-            <AppleButton title={isPast ? 'Ghi vào nhật ký' : 'Thêm vào kế hoạch'} onPress={addFree} style={{ marginTop: 20 }} />
-          </ScrollView>}
+          </> : <>
+            <ScrollView contentContainerStyle={{ paddingHorizontal: Spacing.lg, paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
+              <View style={styles.formCard}>
+                <Text style={styles.label}>Tên món</Text>
+                <TextInput style={styles.input} placeholder="Ví dụ: Phở bò ngoài hàng" placeholderTextColor={HeronColors.disable} value={freeTitle} onChangeText={setFreeTitle} maxLength={80} />
+                <Text style={styles.label}>Calo ước tính <Text style={styles.labelHint}>(kcal / người, tùy chọn)</Text></Text>
+                <TextInput style={styles.input} keyboardType="numeric" placeholder="Ví dụ: 450" placeholderTextColor={HeronColors.disable} value={freeKcal} onChangeText={setFreeKcal} />
+                <View style={styles.presetRow}>
+                  {KCAL_PRESETS.map(value => {
+                    const active = freeKcal.trim() === String(value);
+                    return <Pressable key={value} onPress={() => setFreeKcal(active ? '' : String(value))} style={[styles.preset, active && styles.presetActive]}>
+                        <Text style={[styles.presetText, active && styles.presetTextActive]}>{value}</Text>
+                      </Pressable>;
+                  })}
+                </View>
+              </View>
+
+              {/* A free dish has no recipe: what to buy for it is listed here and goes to the shopping list */}
+              {!isPast ? <View style={styles.formCard}>
+                  <Text style={styles.cardTitle}>🛒  Cần mua cho món này <Text style={styles.labelHint}>(tùy chọn)</Text></Text>
+                  <Text style={styles.cardHint}>Món tự nhập không có công thức nên không có sẵn nguyên liệu. Nếu bạn tự nấu, ghi thứ cần mua — chúng được thêm thẳng vào giỏ đi chợ.</Text>
+                  {items.map(item => <View key={item.key} style={styles.itemRow}>
+                      <TextInput style={[styles.input, styles.itemName]} placeholder="Nguyên liệu" placeholderTextColor={HeronColors.disable} value={item.name} onChangeText={name => updateItem(item.key, { name })} />
+                      <TextInput style={[styles.input, styles.itemAmount]} placeholder="SL" placeholderTextColor={HeronColors.disable} keyboardType="decimal-pad" value={item.amount} onChangeText={amount => updateItem(item.key, { amount })} />
+                      <TextInput style={[styles.input, styles.itemUnit]} placeholder="đơn vị" placeholderTextColor={HeronColors.disable} autoCapitalize="none" value={item.unit} onChangeText={unit => updateItem(item.key, { unit })} />
+                      <Pressable accessibilityLabel="Bỏ nguyên liệu này" hitSlop={6} onPress={() => setItems(list => list.filter(row => row.key !== item.key))} style={styles.itemRemove}><Text style={styles.closeText}>✕</Text></Pressable>
+                    </View>)}
+                  <Pressable accessibilityRole="button" onPress={() => setItems(list => [...list, emptyItem()])} style={({ pressed }) => [styles.addItemBtn, pressed && { opacity: 0.7 }]}>
+                    <Text style={styles.addItemText}>＋ Thêm nguyên liệu</Text>
+                  </Pressable>
+                </View> : null}
+            </ScrollView>
+            <View style={[styles.bottomBar, { paddingBottom: 12 + padBottom }]}>
+              <AppleButton
+                title={saving ? 'Đang lưu…' : isPast ? 'Ghi vào nhật ký' : buyCount ? `Thêm vào kế hoạch & giỏ (${buyCount})` : 'Thêm vào kế hoạch'}
+                onPress={addFree}
+                disabled={saving}
+                style={{ width: '100%' }}
+              />
+            </View>
+          </>}
       </KeyboardAvoidingView>
     </Modal>;
 };
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
-  header: { marginBottom: Spacing.md },
+  header: { flexDirection: 'row', alignItems: 'flex-end', gap: 12, marginBottom: Spacing.md },
   tag: { fontSize: 10, fontWeight: '900', color: HeronColors.brand, letterSpacing: 1 },
   title: { fontSize: 26, fontWeight: '900', color: HeronColors.primary, letterSpacing: -0.8 },
-  weekNav: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
-  navBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center', justifyContent: 'center' },
-  navText: { fontSize: 20, fontWeight: '700', color: HeronColors.primary, lineHeight: 22 },
-  weekLabel: { fontSize: 13, fontWeight: '800', color: HeronColors.primary },
-  todayBtn: { marginLeft: 'auto', paddingHorizontal: 12, paddingVertical: 6, borderRadius: Radius.full, backgroundColor: HeronColors.brandLight },
-  todayText: { fontSize: 12, fontWeight: '800', color: HeronColors.brandHover },
+  weekNav: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+  navBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center', justifyContent: 'center' },
+  navText: { fontSize: 22, fontWeight: '700', color: HeronColors.primary, lineHeight: 24 },
+  weekLabel: { flex: 1, textAlign: 'center', fontSize: 15, fontWeight: '800', color: HeronColors.primary, fontVariant: ['tabular-nums'] },
+  todayBtn: { height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: Radius.full, backgroundColor: HeronColors.brandLight, borderWidth: 1, borderColor: '#FFD8CF' },
+  todayText: { fontSize: 13, fontWeight: '800', color: HeronColors.brand },
   weekRow: { flexDirection: 'row', gap: 6, marginBottom: Spacing.md },
-  dayChip: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: Radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, gap: 2 },
+  dayChip: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: Radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, gap: 2 },
+  dayChipToday: { backgroundColor: HeronColors.brandLight, borderColor: '#FFD8CF' },
   dayChipActive: { backgroundColor: HeronColors.primary, borderColor: HeronColors.primary },
   dayName: { fontSize: 10, fontWeight: '800', color: HeronColors.surface },
   dayNum: { fontSize: 16, fontWeight: '900', color: HeronColors.primary },
@@ -295,40 +419,81 @@ const styles = StyleSheet.create({
   fill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: HeronColors.emerald, borderRadius: 4 },
   fillOver: { backgroundColor: HeronColors.brand },
   fillPlanned: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: '#FFD2C2', borderRadius: 4 },
-  summaryHint: { fontSize: 12, color: HeronColors.granite, marginTop: 10, lineHeight: 17 },
-  slotCard: { backgroundColor: '#FFFFFF', borderRadius: Radius.md, borderWidth: 1, borderColor: HeronColors.border, paddingHorizontal: 14, paddingTop: 12, marginBottom: 10 },
-  slotHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  slotTitle: { fontSize: 14, fontWeight: '800', color: HeronColors.primary },
-  slotKcal: { fontSize: 12, fontWeight: '800', color: HeronColors.brand },
-  mealRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: HeronColors.borderLight },
-  check: { width: 24, height: 24, borderRadius: 7, borderWidth: 1.5, borderColor: HeronColors.disable, alignItems: 'center', justifyContent: 'center' },
+  legend: { flexDirection: 'row', gap: 14, marginTop: 8 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendText: { fontSize: 11, fontWeight: '600', color: HeronColors.granite },
+  statsRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  statBox: { flex: 1, paddingVertical: 10, paddingHorizontal: 10, borderRadius: Radius.md, backgroundColor: HeronColors.cardAlt, borderWidth: 1, borderColor: HeronColors.borderLight },
+  statLabel: { fontSize: 11, fontWeight: '700', color: HeronColors.granite },
+  statValue: { marginTop: 4, fontSize: 16, fontWeight: '900', color: HeronColors.primary, fontVariant: ['tabular-nums'] },
+  statUnit: { fontSize: 11, fontWeight: '700', color: HeronColors.granite },
+  slotCard: { backgroundColor: '#FFFFFF', borderRadius: Radius.lg, borderWidth: 1, borderColor: HeronColors.border, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 10 },
+  slotHead: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  slotIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: HeronColors.cardAlt, alignItems: 'center', justifyContent: 'center' },
+  slotIconText: { fontSize: 20 },
+  slotTitle: { fontSize: 15, fontWeight: '800', color: HeronColors.primary },
+  slotSub: { marginTop: 1, fontSize: 12, fontWeight: '600', color: HeronColors.granite },
+  addBtn: { height: 34, paddingHorizontal: 14, justifyContent: 'center', borderRadius: Radius.full, backgroundColor: HeronColors.brandLight, borderWidth: 1, borderColor: '#FFD8CF' },
+  slotMeals: { marginTop: 10 },
+  mealRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11, borderTopWidth: 1, borderTopColor: HeronColors.borderLight },
+  check: { width: 26, height: 26, borderRadius: 8, borderWidth: 1.5, borderColor: HeronColors.disable, alignItems: 'center', justifyContent: 'center' },
   checkOn: { backgroundColor: HeronColors.emerald, borderColor: HeronColors.emerald },
   checkCooked: { backgroundColor: HeronColors.emeraldLight, borderColor: HeronColors.emeraldLight },
   checkMark: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
   mealTitle: { fontSize: 14, fontWeight: '700', color: HeronColors.primary },
   mealSkipped: { color: HeronColors.disable, textDecorationLine: 'line-through' },
   mealMeta: { fontSize: 11, color: HeronColors.granite, marginTop: 2 },
-  remove: { fontSize: 13, fontWeight: '800', color: HeronColors.disable, paddingHorizontal: 4 },
-  addRow: { paddingVertical: 11, borderTopWidth: 1, borderTopColor: HeronColors.borderLight },
+  removeBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: HeronColors.cardAlt, alignItems: 'center', justifyContent: 'center' },
+  remove: { fontSize: 12, fontWeight: '800', color: HeronColors.granite },
   addText: { fontSize: 13, fontWeight: '800', color: HeronColors.brand },
-  actions: { gap: 8, marginTop: 6 },
+  actions: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  actionCard: { flex: 1, padding: 14, borderRadius: Radius.lg, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border },
+  actionIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: HeronColors.cardAlt, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
+  actionIconText: { fontSize: 18, color: HeronColors.primary, fontWeight: '800' },
+  actionTitle: { fontSize: 14, fontWeight: '800', color: HeronColors.primary },
+  actionSub: { marginTop: 2, fontSize: 12, lineHeight: 16, color: HeronColors.granite },
   modal: { flex: 1, backgroundColor: HeronColors.canvas },
-  modalHead: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.lg, paddingTop: 18, paddingBottom: Spacing.md },
-  modalTitle: { fontSize: 22, fontWeight: '900', color: HeronColors.primary, marginTop: 2 },
-  closeBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center', justifyContent: 'center' },
-  closeText: { fontSize: 15, fontWeight: '800', color: HeronColors.primary },
-  segment: { flexDirection: 'row', marginHorizontal: Spacing.lg, padding: 4, borderRadius: Radius.full, backgroundColor: HeronColors.borderLight, marginBottom: 12 },
-  segmentBtn: { flex: 1, paddingVertical: 8, borderRadius: Radius.full, alignItems: 'center' },
+  modalHead: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: Spacing.lg, paddingTop: 18, paddingBottom: Spacing.md },
+  modalTitle: { fontSize: 24, fontWeight: '900', color: HeronColors.primary, marginTop: 4, letterSpacing: -0.5 },
+  closeBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center', justifyContent: 'center' },
+  closeText: { fontSize: 14, fontWeight: '800', color: HeronColors.primary },
+  segment: { flexDirection: 'row', marginHorizontal: Spacing.lg, padding: 4, borderRadius: Radius.full, backgroundColor: HeronColors.borderLight, marginBottom: 14 },
+  segmentBtn: { flex: 1, height: 40, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center' },
   segmentActive: { backgroundColor: '#FFFFFF', ...HeronShadow.subtle },
-  segmentText: { fontSize: 12, fontWeight: '800', color: HeronColors.granite },
+  segmentText: { fontSize: 13, fontWeight: '800', color: HeronColors.granite },
   segmentTextActive: { color: HeronColors.primary },
-  modalRow: { flexDirection: 'row', gap: 8, alignItems: 'center', paddingHorizontal: Spacing.lg, marginBottom: 8 },
-  input: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, borderRadius: Radius.sm, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: HeronColors.primary },
-  stepper: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8, borderRadius: Radius.sm, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border },
-  stepperBtn: { fontSize: 18, fontWeight: '800', color: HeronColors.brand, paddingHorizontal: 2 },
-  stepperVal: { fontSize: 12, fontWeight: '800', color: HeronColors.primary },
-  pickRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: HeronColors.borderLight },
-  pickPlus: { fontSize: 20, color: HeronColors.brand, fontWeight: '700' },
-  empty: { fontSize: 12, color: HeronColors.granite, marginTop: 14, lineHeight: 17 },
-  label: { fontSize: 12, fontWeight: '800', color: HeronColors.primary, marginTop: 14, marginBottom: 6 }
+  modalRow: { flexDirection: 'row', gap: 8, alignItems: 'center', paddingHorizontal: Spacing.lg, marginBottom: 12 },
+  searchBox: { flex: 1, height: 46, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, borderRadius: Radius.full, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border },
+  searchIcon: { fontSize: 18, color: HeronColors.granite },
+  searchInput: { flex: 1, fontSize: 14, color: HeronColors.primary, paddingVertical: 0 },
+  input: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, borderRadius: 12, paddingHorizontal: 12, height: 46, fontSize: 14, color: HeronColors.primary },
+  stepper: { height: 46, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, borderRadius: Radius.full, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border },
+  stepperBtnWrap: { width: 30, height: 30, borderRadius: 15, backgroundColor: HeronColors.brandLight, alignItems: 'center', justifyContent: 'center' },
+  stepperBtn: { fontSize: 17, fontWeight: '800', color: HeronColors.brand, lineHeight: 20 },
+  stepperVal: { minWidth: 48, textAlign: 'center', fontSize: 13, fontWeight: '800', color: HeronColors.primary },
+  pickCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 10, marginBottom: 8, borderRadius: Radius.lg, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border },
+  pickThumb: { width: 54, height: 54, borderRadius: 12, backgroundColor: HeronColors.borderLight },
+  pickTitle: { fontSize: 14, fontWeight: '800', color: HeronColors.primary },
+  pickPlus: { width: 34, height: 34, borderRadius: 17, backgroundColor: HeronColors.brandLight, alignItems: 'center', justifyContent: 'center' },
+  pickPlusText: { fontSize: 18, color: HeronColors.brand, fontWeight: '800' },
+  empty: { fontSize: 12, color: HeronColors.granite, marginTop: 12, lineHeight: 17, textAlign: 'center' },
+  formCard: { backgroundColor: '#FFFFFF', borderRadius: Radius.lg, borderWidth: 1, borderColor: HeronColors.border, padding: 16, marginBottom: 12 },
+  cardTitle: { fontSize: 15, fontWeight: '800', color: HeronColors.primary },
+  cardHint: { marginTop: 4, marginBottom: 6, fontSize: 12, lineHeight: 17, color: HeronColors.granite },
+  label: { fontSize: 13, fontWeight: '800', color: HeronColors.primary, marginTop: 12, marginBottom: 6 },
+  labelHint: { fontSize: 12, fontWeight: '600', color: HeronColors.granite },
+  presetRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  preset: { flex: 1, height: 36, borderRadius: Radius.full, borderWidth: 1, borderColor: HeronColors.border, backgroundColor: HeronColors.cardAlt, alignItems: 'center', justifyContent: 'center' },
+  presetActive: { backgroundColor: HeronColors.brandLight, borderColor: HeronColors.brand },
+  presetText: { fontSize: 13, fontWeight: '700', color: HeronColors.granite },
+  presetTextActive: { color: HeronColors.brand },
+  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
+  itemName: { flex: 1 },
+  itemAmount: { width: 56, textAlign: 'center', paddingHorizontal: 6 },
+  itemUnit: { width: 72, paddingHorizontal: 8 },
+  itemRemove: { width: 32, height: 32, borderRadius: 16, backgroundColor: HeronColors.cardAlt, alignItems: 'center', justifyContent: 'center' },
+  addItemBtn: { marginTop: 10, height: 42, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: HeronColors.brand, alignItems: 'center', justifyContent: 'center' },
+  addItemText: { fontSize: 13, fontWeight: '800', color: HeronColors.brand },
+  bottomBar: { paddingHorizontal: Spacing.lg, paddingTop: 12, backgroundColor: HeronColors.canvas, borderTopWidth: 1, borderTopColor: HeronColors.borderLight }
 });

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Image, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRecipes } from '../context/RecipeContext';
@@ -30,7 +30,6 @@ export default function AppMainScreen() {
   const {
     recipes,
     activeRecipeForCooking,
-    cookingSession,
     cookingStepIndex,
     startCookingSession,
     setCookingStep,
@@ -48,7 +47,6 @@ export default function AppMainScreen() {
     getRecipeById,
     settings,
     categories,
-    pantryIngredients,
     timers
   } = useRecipes();
   const CATEGORIES = useMemo(() => [ALL_CATEGORY, ...categories], [categories]);
@@ -60,13 +58,15 @@ export default function AppMainScreen() {
   const allergies = useMemo(() => settings.allergies || [], [settings.allergies]);
   // Bottom menu: 'explore' | 'plan' | 'profile' (fridge and shopping list open as sheets)
   const [currentTab, setCurrentTab] = useState('explore');
-  // Sub-page of the profile tab: 'home' | 'myRecipes' | 'requests'
+  // Sub-page of the profile tab: 'home' | 'myRecipes' | 'myRecipes:custom' | 'requests'
   const [profileView, setProfileView] = useState('home');
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
 
   // Modals state
   const [selectedRecipeForDetail, setSelectedRecipeForDetail] = useState(null);
   const [isCookingVisible, setIsCookingVisible] = useState(false);
+  const [isCookingCountdown, setIsCookingCountdown] = useState(false);
+  const endCookingCountdown = useCallback(() => setIsCookingCountdown(false), []);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState(null);
   // Recipe whose copy is being created ("Tạo bản sao để chỉnh")
@@ -114,9 +114,20 @@ export default function AppMainScreen() {
     if (Platform.OS === 'ios') setTimeout(fn, 450);
     else fn();
   };
+  // A recipe opened from "Tủ lạnh nhà tôi" goes back to it when closed (✕, back button, "all ready")
+  const [isDetailFromPantry, setIsDetailFromPantry] = useState(false);
+  const closeRecipeDetail = () => {
+    setSelectedRecipeForDetail(null);
+    if (!isDetailFromPantry) return;
+    setIsDetailFromPantry(false);
+    afterModalDismiss(() => setIsPantryVisible(true));
+  };
   // The session ended elsewhere (dish finished, recipe deleted): the cooking screen is gone too
   useEffect(() => {
-    if (!activeRecipeForCooking) setIsCookingVisible(false);
+    if (!activeRecipeForCooking) {
+      setIsCookingVisible(false);
+      setIsCookingCountdown(false);
+    }
   }, [activeRecipeForCooking]);
   const switchCookingTo = (recipe, start) => {
     const current = activeRecipeForCooking;
@@ -135,8 +146,10 @@ export default function AppMainScreen() {
       showAlert('Chưa có bước nấu', 'Công thức này chưa có bước hướng dẫn nào. Hãy sửa công thức để thêm bước trước khi nấu.');
       return;
     }
+    // A new session opens on the 5-second "get ready" countdown; resuming never does
     const restart = () => {
       startCookingSession(recipe, { servings });
+      setIsCookingCountdown(true);
       setIsCookingVisible(true);
     };
     if (activeRecipeForCooking?.id === recipe.id && cookingStepIndex > 0) {
@@ -214,20 +227,6 @@ export default function AppMainScreen() {
         </View> : null}
 
         {currentTab === 'explore' ? <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-            {/* A dish in progress survives closing Cooking Mode and restarting the app */}
-            {activeRecipeForCooking && !isCookingVisible ? <View style={styles.resumeCard}>
-                <Pressable accessibilityRole="button" accessibilityLabel={`Tiếp tục nấu ${activeRecipeForCooking.title}`} onPress={() => setIsCookingVisible(true)} style={styles.resumeMain}>
-                  <Text style={styles.resumeTag}>ĐANG NẤU DỞ</Text>
-                  <Text style={styles.resumeTitle} numberOfLines={1}>{activeRecipeForCooking.title}</Text>
-                  <Text style={styles.resumeMeta}>
-                    Bước {cookingStepIndex + 1}/{activeRecipeForCooking.steps.length} • {cookingSession?.servings} người • Chạm để tiếp tục ›
-                  </Text>
-                </Pressable>
-                <Pressable accessibilityRole="button" accessibilityLabel="Kết thúc phiên nấu" hitSlop={8} onPress={handleEndSession} style={styles.resumeClose}>
-                  <Text style={styles.resumeCloseText}>✕</Text>
-                </Pressable>
-              </View> : null}
-
             {/* Heron Precision Search Bar */}
             <View style={styles.searchBar}>
               <Text style={styles.searchIcon}>⌕</Text>
@@ -423,19 +422,19 @@ export default function AppMainScreen() {
             onEditRecipe={rec => handleEditRecipe(rec)}
             onOpenSettings={() => setIsSettingsModalVisible(true)}
             onOpenQr={() => setIsQrScannerVisible(true)}
+            onOpenPantry={() => setIsPantryVisible(true)}
           />}
 
         {/* AI Sous-Chef chat bubble (general questions, meal ideas) */}
-        {currentTab !== 'profile' ? <Pressable accessibilityRole="button" accessibilityLabel="Mở trợ lý AI" onPress={() => setIsAiChatVisible(true)} style={({ pressed }) => [styles.aiFab, { bottom: timers.length && !isCookingVisible ? 170 : 104, transform: [{ scale: pressed ? 0.92 : 1 }] }]}>
+        {currentTab !== 'profile' ? <Pressable accessibilityRole="button" accessibilityLabel="Mở trợ lý AI" onPress={() => setIsAiChatVisible(true)} style={({ pressed }) => [styles.aiFab, { bottom: (timers.length || activeRecipeForCooking) && !isCookingVisible ? 170 : 104, transform: [{ scale: pressed ? 0.92 : 1 }] }]}>
             <AiChefLogo size={52} />
           </Pressable> : null}
 
-        {/* Bottom menu: tabs + fridge / shopping sheets + create */}
+        {/* Bottom menu: 5 items, "+" (create) in the middle. The fridge opens from Hồ sơ */}
         <View style={styles.tabBarContainer}>
           <View style={styles.tabBar}>
             {renderDockItem({ key: 'explore', icon: '⌂', label: 'Khám phá', active: currentTab === 'explore', onPress: () => setCurrentTab('explore') })}
             {renderDockItem({ key: 'plan', icon: '🗓', label: 'Lịch ăn', active: currentTab === 'plan', onPress: () => setCurrentTab('plan') })}
-            {renderDockItem({ key: 'fridge', icon: '🧊', label: 'Tủ lạnh', active: isPantryVisible, badge: pantryIngredients.length || null, badgeMuted: true, onPress: () => setIsPantryVisible(true) })}
 
             <Pressable accessibilityRole="button" accessibilityLabel="Tạo công thức mới" onPress={() => {
             setEditingRecipe(null);
@@ -460,21 +459,39 @@ export default function AppMainScreen() {
         <RecipeDetailModal
           recipe={selectedRecipeForDetail}
           visible={!!selectedRecipeForDetail}
-          onClose={() => setSelectedRecipeForDetail(null)}
-          onStartCooking={(rec, servings) => afterModalDismiss(() => openCooking(rec, servings))}
+          onClose={closeRecipeDetail}
+          // Opened from the pantry: "all ingredients ready" leads back to it
+          onAllReady={isDetailFromPantry ? closeRecipeDetail : undefined}
+          onStartCooking={(rec, servings) => {
+            setIsDetailFromPantry(false);
+            setSelectedRecipeForDetail(null);
+            afterModalDismiss(() => openCooking(rec, servings));
+          }}
           onEditRecipe={rec => {
+            setIsDetailFromPantry(false);
             setSelectedRecipeForDetail(null);
             afterModalDismiss(() => handleEditRecipe(rec));
           }}
           onDuplicateRecipe={rec => {
+            setIsDetailFromPantry(false);
             setSelectedRecipeForDetail(null);
             afterModalDismiss(() => handleDuplicateRecipe(rec));
           }}
         />
 
-        <CookingModeModal recipe={activeRecipeForCooking} visible={!!activeRecipeForCooking && isCookingVisible} onClose={() => setIsCookingVisible(false)} />
+        <CookingModeModal
+          recipe={activeRecipeForCooking}
+          visible={!!activeRecipeForCooking && isCookingVisible}
+          onClose={() => {
+            setIsCookingCountdown(false);
+            setIsCookingVisible(false);
+          }}
+          countdown={isCookingCountdown}
+          onCountdownDone={endCookingCountdown}
+        />
 
-        {!isCookingVisible ? <FloatingTimerWidget onPress={reopenTimerStep} bottomOffset={100} /> : null}
+        {/* Timers, or the dish in progress when no timer is left: pinned on every tab */}
+        {!isCookingVisible ? <FloatingTimerWidget onPress={reopenTimerStep} onOpenSession={() => setIsCookingVisible(true)} onEndSession={handleEndSession} bottomOffset={100} /> : null}
 
         <CreateRecipeModal visible={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} editingRecipe={editingRecipe} templateRecipe={templateRecipe} />
 
@@ -485,7 +502,8 @@ export default function AppMainScreen() {
         <ShoppingListModal visible={isShoppingListVisible} onClose={() => setIsShoppingListVisible(false)} />
 
         <QrScannerModal visible={isQrScannerVisible} onClose={() => setIsQrScannerVisible(false)} onImported={() => {
-          setProfileView('myRecipes');
+          // The received recipe is the user's own: land on "Món của tôi → Tự tạo"
+          setProfileView('myRecipes:custom');
           setCurrentTab('profile');
         }} />
         <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={null} />
@@ -494,7 +512,8 @@ export default function AppMainScreen() {
           onClose={() => setIsPantryVisible(false)}
           onSelectRecipe={recipe => {
             setIsPantryVisible(false);
-            setSelectedRecipeForDetail(recipe);
+            setIsDetailFromPantry(true);
+            afterModalDismiss(() => setSelectedRecipeForDetail(recipe));
           }}
         />
       </View>
@@ -528,49 +547,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#C2410C'
-  },
-  resumeCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.lg,
-    backgroundColor: HeronColors.primary,
-    ...HeronShadow.card
-  },
-  resumeMain: {
-    flex: 1,
-    paddingVertical: 14,
-    paddingLeft: 18,
-    gap: 2
-  },
-  resumeTag: {
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 1,
-    color: HeronColors.brand
-  },
-  resumeTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#FFFFFF'
-  },
-  resumeMeta: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.75)'
-  },
-  resumeClose: {
-    width: 48,
-    alignSelf: 'stretch',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderLeftWidth: 1,
-    borderLeftColor: 'rgba(255,255,255,0.2)'
-  },
-  resumeCloseText: {
-    color: '#FFFFFF',
-    fontWeight: '800',
-    fontSize: 16
   },
   resetFilterBtn: {
     marginTop: 14,
