@@ -43,10 +43,11 @@ export const ProfileScreen = ({ view, onChangeView, onSelectRecipe, onEditRecipe
   const goal = settings.calorieGoal || 2000;
   const changeGoal = delta => updateSettings({ calorieGoal: Math.min(CALORIE_GOAL_MAX, Math.max(CALORIE_GOAL_MIN, goal + delta)) });
 
-  if (view === 'myRecipes') {
+  // "myRecipes:custom" opens the same screen on its "Tự tạo" tab (e.g. after receiving a QR recipe)
+  if (view === 'myRecipes' || view === 'myRecipes:custom') {
     return <View style={{ flex: 1 }}>
         <SubHeader title="Món của tôi" onBack={() => onChangeView('home')} />
-        <MyRecipesView onSelectRecipe={onSelectRecipe} onEditRecipe={onEditRecipe} />
+        <MyRecipesView key={view} initialTab={view === 'myRecipes:custom' ? 'custom' : 'favorites'} onSelectRecipe={onSelectRecipe} onEditRecipe={onEditRecipe} />
       </View>;
   }
   if (view === 'requests') {

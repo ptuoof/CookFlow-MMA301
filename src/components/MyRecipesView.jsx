@@ -18,9 +18,9 @@ const EMPTY = {
 };
 
 /** "Món của tôi": saved recipes, own recipes (edit / delete) and the cooking history. */
-export const MyRecipesView = ({ onSelectRecipe, onEditRecipe }) => {
+export const MyRecipesView = ({ initialTab = 'favorites', onSelectRecipe, onEditRecipe }) => {
   const { recipes, favoriteIds, deleteRecipe, timers, cookHistory, deleteHistoryEntry, getRecipeById } = useRecipes();
-  const [activeTab, setActiveTab] = useState('favorites');
+  const [activeTab, setActiveTab] = useState(initialTab);
   const favoriteRecipes = recipes.filter(r => favoriteIds.includes(r.id));
   // Own recipes only (shared recipes of other users are personal too, but not "mine")
   const customRecipes = recipes.filter(r => r.isCustom && r.isOwner);

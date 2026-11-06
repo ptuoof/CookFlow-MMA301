@@ -58,7 +58,7 @@ export default function AppMainScreen() {
   const allergies = useMemo(() => settings.allergies || [], [settings.allergies]);
   // Bottom menu: 'explore' | 'plan' | 'profile' (fridge and shopping list open as sheets)
   const [currentTab, setCurrentTab] = useState('explore');
-  // Sub-page of the profile tab: 'home' | 'myRecipes' | 'requests'
+  // Sub-page of the profile tab: 'home' | 'myRecipes' | 'myRecipes:custom' | 'requests'
   const [profileView, setProfileView] = useState('home');
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
 
@@ -502,7 +502,8 @@ export default function AppMainScreen() {
         <ShoppingListModal visible={isShoppingListVisible} onClose={() => setIsShoppingListVisible(false)} />
 
         <QrScannerModal visible={isQrScannerVisible} onClose={() => setIsQrScannerVisible(false)} onImported={() => {
-          setProfileView('myRecipes');
+          // The received recipe is the user's own: land on "Món của tôi → Tự tạo"
+          setProfileView('myRecipes:custom');
           setCurrentTab('profile');
         }} />
         <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={null} />
