@@ -19,9 +19,9 @@ const initialsOf = name => String(name || '?').trim().split(/\s+/).slice(-2).map
  * shortcuts that used to live in the header (settings, QR scan, sign out).
  * `view` is controlled by the parent so other screens can open "Món của tôi" directly.
  */
-export const ProfileScreen = ({ view, onChangeView, onSelectRecipe, onEditRecipe, onOpenSettings, onOpenQr }) => {
+export const ProfileScreen = ({ view, onChangeView, onSelectRecipe, onEditRecipe, onOpenSettings, onOpenQr, onOpenPantry }) => {
   const { user, signOut, updateProfile, changePassword } = useAuth();
-  const { recipes, favoriteIds, cookHistory, mealPlan, recipeRequests, deleteRecipeRequest, settings, updateSettings } = useRecipes();
+  const { recipes, favoriteIds, cookHistory, mealPlan, recipeRequests, deleteRecipeRequest, settings, updateSettings, pantryIngredients } = useRecipes();
   const [isRequestVisible, setIsRequestVisible] = useState(false);
   const [isEditVisible, setIsEditVisible] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
@@ -91,6 +91,7 @@ export const ProfileScreen = ({ view, onChangeView, onSelectRecipe, onEditRecipe
 
   const menu = [
     { icon: '📒', label: 'Món của tôi', detail: `${favoriteIds.length} đã lưu • ${recipes.filter(r => r.isCustom && r.isOwner).length} tự tạo`, onPress: () => onChangeView('myRecipes') },
+    { icon: '🧊', label: 'Tủ lạnh nhà tôi', detail: pantryIngredients.length ? `${pantryIngredients.length} nguyên liệu • xem món nấu được` : 'Chọn nguyên liệu đang có để tìm món', onPress: onOpenPantry },
     { icon: '📮', label: 'Yêu cầu & báo cáo công thức', detail: unreadReplies ? `${unreadReplies} phản hồi từ quản trị viên` : `${myRequests.length} yêu cầu đã gửi`, onPress: () => onChangeView('requests'), badge: unreadReplies },
     { icon: '✍️', label: 'Gửi yêu cầu công thức mới', detail: 'Món bạn muốn CookFlow bổ sung', onPress: () => setIsRequestVisible(true) },
     { icon: '📷', label: 'Quét QR công thức', detail: 'Nhận công thức bạn bè chia sẻ', onPress: onOpenQr },

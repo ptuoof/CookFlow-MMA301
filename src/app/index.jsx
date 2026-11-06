@@ -48,7 +48,6 @@ export default function AppMainScreen() {
     getRecipeById,
     settings,
     categories,
-    pantryIngredients,
     timers
   } = useRecipes();
   const CATEGORIES = useMemo(() => [ALL_CATEGORY, ...categories], [categories]);
@@ -423,6 +422,7 @@ export default function AppMainScreen() {
             onEditRecipe={rec => handleEditRecipe(rec)}
             onOpenSettings={() => setIsSettingsModalVisible(true)}
             onOpenQr={() => setIsQrScannerVisible(true)}
+            onOpenPantry={() => setIsPantryVisible(true)}
           />}
 
         {/* AI Sous-Chef chat bubble (general questions, meal ideas) */}
@@ -430,12 +430,11 @@ export default function AppMainScreen() {
             <AiChefLogo size={52} />
           </Pressable> : null}
 
-        {/* Bottom menu: tabs + fridge / shopping sheets + create */}
+        {/* Bottom menu: 5 items, "+" (create) in the middle. The fridge opens from Hồ sơ */}
         <View style={styles.tabBarContainer}>
           <View style={styles.tabBar}>
             {renderDockItem({ key: 'explore', icon: '⌂', label: 'Khám phá', active: currentTab === 'explore', onPress: () => setCurrentTab('explore') })}
             {renderDockItem({ key: 'plan', icon: '🗓', label: 'Lịch ăn', active: currentTab === 'plan', onPress: () => setCurrentTab('plan') })}
-            {renderDockItem({ key: 'fridge', icon: '🧊', label: 'Tủ lạnh', active: isPantryVisible, badge: pantryIngredients.length || null, badgeMuted: true, onPress: () => setIsPantryVisible(true) })}
 
             <Pressable accessibilityRole="button" accessibilityLabel="Tạo công thức mới" onPress={() => {
             setEditingRecipe(null);
