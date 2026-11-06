@@ -48,6 +48,9 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
   const canGoForward = week[6] < maxDay;
   const progress = goalProgress(kcal.eaten, goal);
   const plannedProgress = goalProgress(kcal.eaten + kcal.planned, goal);
+  // kcal compared with the goal: eaten (past / today) or planned (future)
+  const dayTotal = kind === 'future' ? kcal.planned : kcal.eaten;
+  const over = dayTotal > goal;
 
   const handleShopping = async () => {
     const from = selected < today ? today : selected;
@@ -92,7 +95,7 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
             {meal.recipeId && !recipe ? ' • món đã bị xóa' : ''}
           </Text>
         </View>
-        {!meal.fromHistory ? <Pressable accessibilityLabel={`Xóa ${meal.title}`} hitSlop={8} onPress={() => handleDelete(meal)}>
+        {!meal.fromHistory ? <Pressable accessibilityLabel={`Xóa ${meal.title}`} hitSlop={8} onPress={() => handleDelete(meal)} style={({ pressed }) => [styles.removeBtn, pressed && { opacity: 0.6 }]}>
             <Text style={styles.remove}>✕</Text>
           </Pressable> : null}
       </Pressable>;
@@ -101,16 +104,20 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
   return <View style={{ flex: 1 }}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.tag}>NHẬT KÝ // KẾ HOẠCH BỮA ĂN</Text>
-          <Text style={styles.title}>Lịch ăn</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.tag}>NHẬT KÝ // KẾ HOẠCH BỮA ĂN</Text>
+            <Text style={styles.title}>Lịch ăn</Text>
+          </View>
+          {selected !== today ? <Pressable accessibilityRole="button" onPress={() => setSelected(today)} style={({ pressed }) => [styles.todayBtn, pressed && { opacity: 0.7 }]}>
+              <Text style={styles.todayText}>Hôm nay</Text>
+            </Pressable> : null}
         </View>
 
-        {/* Week strip */}
+        {/* Week strip: ‹ range › */}
         <View style={styles.weekNav}>
-          <Pressable accessibilityLabel="Tuần trước" hitSlop={8} onPress={() => setSelected(addDays(selected, -7))} style={styles.navBtn}><Text style={styles.navText}>‹</Text></Pressable>
+          <Pressable accessibilityLabel="Tuần trước" hitSlop={8} onPress={() => setSelected(addDays(selected, -7))} style={({ pressed }) => [styles.navBtn, pressed && { opacity: 0.6 }]}><Text style={styles.navText}>‹</Text></Pressable>
           <Text style={styles.weekLabel}>{shortDate(week[0])} – {shortDate(week[6])}</Text>
-          <Pressable accessibilityLabel="Tuần sau" disabled={!canGoForward} hitSlop={8} onPress={() => setSelected(addDays(selected, 7) > maxDay ? maxDay : addDays(selected, 7))} style={[styles.navBtn, !canGoForward && { opacity: 0.3 }]}><Text style={styles.navText}>›</Text></Pressable>
-          {selected !== today ? <Pressable onPress={() => setSelected(today)} style={styles.todayBtn}><Text style={styles.todayText}>Hôm nay</Text></Pressable> : null}
+          <Pressable accessibilityLabel="Tuần sau" disabled={!canGoForward} hitSlop={8} onPress={() => setSelected(addDays(selected, 7) > maxDay ? maxDay : addDays(selected, 7))} style={({ pressed }) => [styles.navBtn, !canGoForward && { opacity: 0.3 }, pressed && { opacity: 0.6 }]}><Text style={styles.navText}>›</Text></Pressable>
         </View>
         <View style={styles.weekRow}>
           {week.map(day => {
@@ -118,7 +125,7 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
             const info = weekKcal[day];
             const isToday = day === today;
             const disabled = day > maxDay;
-            return <Pressable key={day} disabled={disabled} accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={`${dayTitle(day, today)}, ${info.count} món`} onPress={() => setSelected(day)} style={[styles.dayChip, active && styles.dayChipActive, disabled && { opacity: 0.3 }]}>
+            return <Pressable key={day} disabled={disabled} accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={`${dayTitle(day, today)}, ${info.count} món`} onPress={() => setSelected(day)} style={[styles.dayChip, isToday && !active && styles.dayChipToday, active && styles.dayChipActive, disabled && { opacity: 0.3 }]}>
                 <Text style={[styles.dayName, active && styles.dayTextActive]}>{weekdayLabel(day)}</Text>
                 <Text style={[styles.dayNum, active && styles.dayTextActive, isToday && !active && { color: HeronColors.brand }]}>{Number(day.slice(8))}</Text>
                 <View style={[styles.dayDot, info.count ? (day < today || info.eaten ? styles.dotEaten : styles.dotPlanned) : null, active && info.count ? { backgroundColor: '#FFFFFF' } : null]} />
@@ -142,12 +149,26 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
             <View style={[styles.fillPlanned, { width: `${Math.min(100, Math.round(plannedProgress * 100))}%` }]} />
             <View style={[styles.fill, progress > 1 && styles.fillOver, { width: `${Math.min(100, Math.round(progress * 100))}%` }]} />
           </View>
-          <Text style={styles.summaryHint}>
-            {kind === 'future'
-              ? (kcal.planned > goal ? `Kế hoạch vượt mục tiêu ${fmt(kcal.planned - goal)} kcal.` : `Còn trống ~${fmt(goal - kcal.planned)} kcal so với mục tiêu.`)
-              : (kcal.eaten > goal ? `Vượt mục tiêu ${fmt(kcal.eaten - goal)} kcal.` : `Còn ${fmt(goal - kcal.eaten)} kcal so với mục tiêu ngày.`)}
-            {' '}7 ngày qua: ghi nhận {recent.days}/7 ngày{recent.days ? `, TB ${fmt(recent.avg)} kcal/ngày` : ''}.
-          </Text>
+          {kind === 'today' ? <View style={styles.legend}>
+              <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: HeronColors.emerald }]} /><Text style={styles.legendText}>Đã ăn</Text></View>
+              <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#FFD2C2' }]} /><Text style={styles.legendText}>Dự kiến</Text></View>
+            </View> : null}
+
+          {/* Three numbers instead of a sentence */}
+          <View style={styles.statsRow}>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>{over ? (kind === 'future' ? 'Vượt kế hoạch' : 'Vượt mục tiêu') : (kind === 'future' ? 'Còn trống' : 'Còn lại')}</Text>
+              <Text style={[styles.statValue, over && { color: HeronColors.brand }]}>{fmt(Math.abs(goal - dayTotal))}<Text style={styles.statUnit}> kcal</Text></Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>7 ngày qua</Text>
+              <Text style={styles.statValue}>{recent.days}/7<Text style={styles.statUnit}> ngày</Text></Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={styles.statLabel}>Trung bình</Text>
+              <Text style={styles.statValue}>{recent.days ? fmt(recent.avg) : '—'}<Text style={styles.statUnit}>{recent.days ? ' kcal' : ''}</Text></Text>
+            </View>
+          </View>
         </View>
 
         {/* Slots */}
@@ -156,19 +177,31 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
           const slotKcal = slotMeals.reduce((sum, meal) => sum + (meal.calories || 0), 0);
           return <View key={slot.id} style={styles.slotCard}>
               <View style={styles.slotHead}>
-                <Text style={styles.slotTitle}>{slot.icon}  {slot.label}</Text>
-                <Text style={styles.slotKcal}>{slotKcal ? `${fmt(slotKcal)} kcal` : ''}</Text>
+                <View style={styles.slotIcon}><Text style={styles.slotIconText}>{slot.icon}</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.slotTitle}>{slot.label}</Text>
+                  <Text style={styles.slotSub}>{slotMeals.length ? `${slotMeals.length} món${slotKcal ? ` • ${fmt(slotKcal)} kcal` : ''}` : 'Chưa có món'}</Text>
+                </View>
+                <Pressable accessibilityRole="button" accessibilityLabel={`${kind === 'past' ? 'Ghi món đã ăn' : 'Thêm món'} vào ${slot.label.toLowerCase()}`} onPress={() => setAddingSlot(slot.id)} style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}>
+                  <Text style={styles.addText}>＋ {kind === 'past' ? 'Ghi' : 'Thêm'}</Text>
+                </Pressable>
               </View>
-              {slotMeals.map(renderMeal)}
-              <Pressable accessibilityRole="button" onPress={() => setAddingSlot(slot.id)} style={styles.addRow}>
-                <Text style={styles.addText}>+ {kind === 'past' ? 'Ghi món đã ăn' : 'Thêm món'}</Text>
-              </Pressable>
+              {slotMeals.length ? <View style={styles.slotMeals}>{slotMeals.map(renderMeal)}</View> : null}
             </View>;
         })}
 
+        {/* Two side-by-side action cards, same look as the meal cards */}
         <View style={styles.actions}>
-          <AppleButton title="🛒 Mua nguyên liệu cho kế hoạch tuần" variant="outline" onPress={handleShopping} style={{ width: '100%' }} />
-          <AppleButton title="⧉ Sao chép thực đơn sang ngày hôm sau" variant="ghost" onPress={handleCopyToTomorrow} style={{ width: '100%' }} />
+          <Pressable accessibilityRole="button" onPress={handleShopping} style={({ pressed }) => [styles.actionCard, pressed && { opacity: 0.75 }]}>
+            <View style={[styles.actionIcon, { backgroundColor: HeronColors.brandLight }]}><Text style={styles.actionIconText}>🛒</Text></View>
+            <Text style={styles.actionTitle}>Mua nguyên liệu</Text>
+            <Text style={styles.actionSub}>cho kế hoạch tuần này</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={handleCopyToTomorrow} style={({ pressed }) => [styles.actionCard, pressed && { opacity: 0.75 }]}>
+            <View style={styles.actionIcon}><Text style={styles.actionIconText}>⧉</Text></View>
+            <Text style={styles.actionTitle}>Sao chép thực đơn</Text>
+            <Text style={styles.actionSub}>sang ngày hôm sau</Text>
+          </Pressable>
         </View>
         <View style={{ height: 150 }} />
       </ScrollView>
@@ -271,17 +304,18 @@ const AddMealModal = ({ visible, slot, date, isPast, onClose, onAdd }) => {
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
-  header: { marginBottom: Spacing.md },
+  header: { flexDirection: 'row', alignItems: 'flex-end', gap: 12, marginBottom: Spacing.md },
   tag: { fontSize: 10, fontWeight: '900', color: HeronColors.brand, letterSpacing: 1 },
   title: { fontSize: 26, fontWeight: '900', color: HeronColors.primary, letterSpacing: -0.8 },
-  weekNav: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
-  navBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center', justifyContent: 'center' },
-  navText: { fontSize: 20, fontWeight: '700', color: HeronColors.primary, lineHeight: 22 },
-  weekLabel: { fontSize: 13, fontWeight: '800', color: HeronColors.primary },
-  todayBtn: { marginLeft: 'auto', paddingHorizontal: 12, paddingVertical: 6, borderRadius: Radius.full, backgroundColor: HeronColors.brandLight },
-  todayText: { fontSize: 12, fontWeight: '800', color: HeronColors.brandHover },
+  weekNav: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+  navBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center', justifyContent: 'center' },
+  navText: { fontSize: 22, fontWeight: '700', color: HeronColors.primary, lineHeight: 24 },
+  weekLabel: { flex: 1, textAlign: 'center', fontSize: 15, fontWeight: '800', color: HeronColors.primary, fontVariant: ['tabular-nums'] },
+  todayBtn: { height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: Radius.full, backgroundColor: HeronColors.brandLight, borderWidth: 1, borderColor: '#FFD8CF' },
+  todayText: { fontSize: 13, fontWeight: '800', color: HeronColors.brand },
   weekRow: { flexDirection: 'row', gap: 6, marginBottom: Spacing.md },
-  dayChip: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: Radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, gap: 2 },
+  dayChip: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: Radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, gap: 2 },
+  dayChipToday: { backgroundColor: HeronColors.brandLight, borderColor: '#FFD8CF' },
   dayChipActive: { backgroundColor: HeronColors.primary, borderColor: HeronColors.primary },
   dayName: { fontSize: 10, fontWeight: '800', color: HeronColors.surface },
   dayNum: { fontSize: 16, fontWeight: '900', color: HeronColors.primary },
@@ -299,23 +333,40 @@ const styles = StyleSheet.create({
   fill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: HeronColors.emerald, borderRadius: 4 },
   fillOver: { backgroundColor: HeronColors.brand },
   fillPlanned: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: '#FFD2C2', borderRadius: 4 },
-  summaryHint: { fontSize: 12, color: HeronColors.granite, marginTop: 10, lineHeight: 17 },
-  slotCard: { backgroundColor: '#FFFFFF', borderRadius: Radius.md, borderWidth: 1, borderColor: HeronColors.border, paddingHorizontal: 14, paddingTop: 12, marginBottom: 10 },
-  slotHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  slotTitle: { fontSize: 14, fontWeight: '800', color: HeronColors.primary },
-  slotKcal: { fontSize: 12, fontWeight: '800', color: HeronColors.brand },
-  mealRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: HeronColors.borderLight },
-  check: { width: 24, height: 24, borderRadius: 7, borderWidth: 1.5, borderColor: HeronColors.disable, alignItems: 'center', justifyContent: 'center' },
+  legend: { flexDirection: 'row', gap: 14, marginTop: 8 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendText: { fontSize: 11, fontWeight: '600', color: HeronColors.granite },
+  statsRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  statBox: { flex: 1, paddingVertical: 10, paddingHorizontal: 10, borderRadius: Radius.md, backgroundColor: HeronColors.cardAlt, borderWidth: 1, borderColor: HeronColors.borderLight },
+  statLabel: { fontSize: 11, fontWeight: '700', color: HeronColors.granite },
+  statValue: { marginTop: 4, fontSize: 16, fontWeight: '900', color: HeronColors.primary, fontVariant: ['tabular-nums'] },
+  statUnit: { fontSize: 11, fontWeight: '700', color: HeronColors.granite },
+  slotCard: { backgroundColor: '#FFFFFF', borderRadius: Radius.lg, borderWidth: 1, borderColor: HeronColors.border, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 10 },
+  slotHead: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  slotIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: HeronColors.cardAlt, alignItems: 'center', justifyContent: 'center' },
+  slotIconText: { fontSize: 20 },
+  slotTitle: { fontSize: 15, fontWeight: '800', color: HeronColors.primary },
+  slotSub: { marginTop: 1, fontSize: 12, fontWeight: '600', color: HeronColors.granite },
+  addBtn: { height: 34, paddingHorizontal: 14, justifyContent: 'center', borderRadius: Radius.full, backgroundColor: HeronColors.brandLight, borderWidth: 1, borderColor: '#FFD8CF' },
+  slotMeals: { marginTop: 10 },
+  mealRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11, borderTopWidth: 1, borderTopColor: HeronColors.borderLight },
+  check: { width: 26, height: 26, borderRadius: 8, borderWidth: 1.5, borderColor: HeronColors.disable, alignItems: 'center', justifyContent: 'center' },
   checkOn: { backgroundColor: HeronColors.emerald, borderColor: HeronColors.emerald },
   checkCooked: { backgroundColor: HeronColors.emeraldLight, borderColor: HeronColors.emeraldLight },
   checkMark: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
   mealTitle: { fontSize: 14, fontWeight: '700', color: HeronColors.primary },
   mealSkipped: { color: HeronColors.disable, textDecorationLine: 'line-through' },
   mealMeta: { fontSize: 11, color: HeronColors.granite, marginTop: 2 },
-  remove: { fontSize: 13, fontWeight: '800', color: HeronColors.disable, paddingHorizontal: 4 },
-  addRow: { paddingVertical: 11, borderTopWidth: 1, borderTopColor: HeronColors.borderLight },
+  removeBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: HeronColors.cardAlt, alignItems: 'center', justifyContent: 'center' },
+  remove: { fontSize: 12, fontWeight: '800', color: HeronColors.granite },
   addText: { fontSize: 13, fontWeight: '800', color: HeronColors.brand },
-  actions: { gap: 8, marginTop: 6 },
+  actions: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  actionCard: { flex: 1, padding: 14, borderRadius: Radius.lg, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border },
+  actionIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: HeronColors.cardAlt, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
+  actionIconText: { fontSize: 18, color: HeronColors.primary, fontWeight: '800' },
+  actionTitle: { fontSize: 14, fontWeight: '800', color: HeronColors.primary },
+  actionSub: { marginTop: 2, fontSize: 12, lineHeight: 16, color: HeronColors.granite },
   modal: { flex: 1, backgroundColor: HeronColors.canvas },
   modalHead: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.lg, paddingTop: 18, paddingBottom: Spacing.md },
   modalTitle: { fontSize: 22, fontWeight: '900', color: HeronColors.primary, marginTop: 2 },
