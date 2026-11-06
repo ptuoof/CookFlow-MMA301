@@ -30,7 +30,6 @@ export default function AppMainScreen() {
   const {
     recipes,
     activeRecipeForCooking,
-    cookingSession,
     cookingStepIndex,
     startCookingSession,
     setCookingStep,
@@ -213,20 +212,6 @@ export default function AppMainScreen() {
         </View> : null}
 
         {currentTab === 'explore' ? <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-            {/* A dish in progress survives closing Cooking Mode and restarting the app */}
-            {activeRecipeForCooking && !isCookingVisible ? <View style={styles.resumeCard}>
-                <Pressable accessibilityRole="button" accessibilityLabel={`Tiếp tục nấu ${activeRecipeForCooking.title}`} onPress={() => setIsCookingVisible(true)} style={styles.resumeMain}>
-                  <Text style={styles.resumeTag}>ĐANG NẤU DỞ</Text>
-                  <Text style={styles.resumeTitle} numberOfLines={1}>{activeRecipeForCooking.title}</Text>
-                  <Text style={styles.resumeMeta}>
-                    Bước {cookingStepIndex + 1}/{activeRecipeForCooking.steps.length} • {cookingSession?.servings} người • Chạm để tiếp tục ›
-                  </Text>
-                </Pressable>
-                <Pressable accessibilityRole="button" accessibilityLabel="Kết thúc phiên nấu" hitSlop={8} onPress={handleEndSession} style={styles.resumeClose}>
-                  <Text style={styles.resumeCloseText}>✕</Text>
-                </Pressable>
-              </View> : null}
-
             {/* Heron Precision Search Bar */}
             <View style={styles.searchBar}>
               <Text style={styles.searchIcon}>⌕</Text>
@@ -426,7 +411,7 @@ export default function AppMainScreen() {
           />}
 
         {/* AI Sous-Chef chat bubble (general questions, meal ideas) */}
-        {currentTab !== 'profile' ? <Pressable accessibilityRole="button" accessibilityLabel="Mở trợ lý AI" onPress={() => setIsAiChatVisible(true)} style={({ pressed }) => [styles.aiFab, { bottom: timers.length && !isCookingVisible ? 170 : 104, transform: [{ scale: pressed ? 0.92 : 1 }] }]}>
+        {currentTab !== 'profile' ? <Pressable accessibilityRole="button" accessibilityLabel="Mở trợ lý AI" onPress={() => setIsAiChatVisible(true)} style={({ pressed }) => [styles.aiFab, { bottom: (timers.length || activeRecipeForCooking) && !isCookingVisible ? 170 : 104, transform: [{ scale: pressed ? 0.92 : 1 }] }]}>
             <AiChefLogo size={52} />
           </Pressable> : null}
 
@@ -473,7 +458,8 @@ export default function AppMainScreen() {
 
         <CookingModeModal recipe={activeRecipeForCooking} visible={!!activeRecipeForCooking && isCookingVisible} onClose={() => setIsCookingVisible(false)} />
 
-        {!isCookingVisible ? <FloatingTimerWidget onPress={reopenTimerStep} bottomOffset={100} /> : null}
+        {/* Timers, or the dish in progress when no timer is left: pinned on every tab */}
+        {!isCookingVisible ? <FloatingTimerWidget onPress={reopenTimerStep} onOpenSession={() => setIsCookingVisible(true)} onEndSession={handleEndSession} bottomOffset={100} /> : null}
 
         <CreateRecipeModal visible={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} editingRecipe={editingRecipe} templateRecipe={templateRecipe} />
 
@@ -527,49 +513,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#C2410C'
-  },
-  resumeCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
-    borderRadius: Radius.lg,
-    backgroundColor: HeronColors.primary,
-    ...HeronShadow.card
-  },
-  resumeMain: {
-    flex: 1,
-    paddingVertical: 14,
-    paddingLeft: 18,
-    gap: 2
-  },
-  resumeTag: {
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 1,
-    color: HeronColors.brand
-  },
-  resumeTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#FFFFFF'
-  },
-  resumeMeta: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.75)'
-  },
-  resumeClose: {
-    width: 48,
-    alignSelf: 'stretch',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderLeftWidth: 1,
-    borderLeftColor: 'rgba(255,255,255,0.2)'
-  },
-  resumeCloseText: {
-    color: '#FFFFFF',
-    fontWeight: '800',
-    fontSize: 16
   },
   resetFilterBtn: {
     marginTop: 14,
