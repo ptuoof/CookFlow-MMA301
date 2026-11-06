@@ -20,6 +20,8 @@ export const RecipeDetailModal = ({
   recipe: recipeProp,
   visible,
   onClose,
+  // Optional: called after "Đã hiểu" on the "all ingredients ready" message (e.g. back to the pantry)
+  onAllReady,
   onStartCooking,
   onEditRecipe,
   onDuplicateRecipe
@@ -63,7 +65,7 @@ export const RecipeDetailModal = ({
   const missingIngredients = recipe.ingredients.filter(item => !checkedIngredients[item.id]);
   const handleAddToShopping = async () => {
     if (missingIngredients.length === 0) {
-      showAlert('Đã đủ nguyên liệu ✓', 'Bạn đã đánh dấu có sẵn tất cả nguyên liệu, không cần mua thêm.');
+      showAlert('Đã đủ nguyên liệu ✓', 'Bạn đã đánh dấu có sẵn tất cả nguyên liệu, không cần mua thêm.', onAllReady ? { onClose: onAllReady } : undefined);
       return;
     }
     const saved = await addToShoppingList(missingIngredients.map(item => ({
@@ -348,10 +350,8 @@ export const RecipeDetailModal = ({
 
         {/* Sticky Action Footer (Heron Brand Flame Button) */}
         <View style={styles.stickyFooter}>
-          <AppleButton title="BẮT ĐẦU NẤU CÙNG VIDEO & HẸN GIỜ ➔" size="lg" variant="primary" onPress={() => {
-          onClose();
-          onStartCooking(recipe, currentServings);
-        }} />
+          {/* The parent closes this sheet itself (it must not reopen the screen it came from) */}
+          <AppleButton title="BẮT ĐẦU NẤU CÙNG VIDEO & HẸN GIỜ ➔" size="lg" variant="primary" onPress={() => onStartCooking(recipe, currentServings)} />
         </View>
 
         <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={recipe} servings={currentServings} initialQuestion={aiQuestion} />

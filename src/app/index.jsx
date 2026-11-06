@@ -114,6 +114,14 @@ export default function AppMainScreen() {
     if (Platform.OS === 'ios') setTimeout(fn, 450);
     else fn();
   };
+  // A recipe opened from "Tủ lạnh nhà tôi" goes back to it when closed (✕, back button, "all ready")
+  const [isDetailFromPantry, setIsDetailFromPantry] = useState(false);
+  const closeRecipeDetail = () => {
+    setSelectedRecipeForDetail(null);
+    if (!isDetailFromPantry) return;
+    setIsDetailFromPantry(false);
+    afterModalDismiss(() => setIsPantryVisible(true));
+  };
   // The session ended elsewhere (dish finished, recipe deleted): the cooking screen is gone too
   useEffect(() => {
     if (!activeRecipeForCooking) {
@@ -451,13 +459,21 @@ export default function AppMainScreen() {
         <RecipeDetailModal
           recipe={selectedRecipeForDetail}
           visible={!!selectedRecipeForDetail}
-          onClose={() => setSelectedRecipeForDetail(null)}
-          onStartCooking={(rec, servings) => afterModalDismiss(() => openCooking(rec, servings))}
+          onClose={closeRecipeDetail}
+          // Opened from the pantry: "all ingredients ready" leads back to it
+          onAllReady={isDetailFromPantry ? closeRecipeDetail : undefined}
+          onStartCooking={(rec, servings) => {
+            setIsDetailFromPantry(false);
+            setSelectedRecipeForDetail(null);
+            afterModalDismiss(() => openCooking(rec, servings));
+          }}
           onEditRecipe={rec => {
+            setIsDetailFromPantry(false);
             setSelectedRecipeForDetail(null);
             afterModalDismiss(() => handleEditRecipe(rec));
           }}
           onDuplicateRecipe={rec => {
+            setIsDetailFromPantry(false);
             setSelectedRecipeForDetail(null);
             afterModalDismiss(() => handleDuplicateRecipe(rec));
           }}
@@ -495,7 +511,8 @@ export default function AppMainScreen() {
           onClose={() => setIsPantryVisible(false)}
           onSelectRecipe={recipe => {
             setIsPantryVisible(false);
-            setSelectedRecipeForDetail(recipe);
+            setIsDetailFromPantry(true);
+            afterModalDismiss(() => setSelectedRecipeForDetail(recipe));
           }}
         />
       </View>
