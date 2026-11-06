@@ -43,6 +43,8 @@ export const CookingModeModal = ({
   // ("Nghe lại" reads it again); the header button turns that off / on
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const spokenSteps = useRef(new Set());
+  // True while a step is being read (enables "Dừng đọc")
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [countLeft, setCountLeft] = useState(COUNTDOWN_SECONDS);
   const countScale = useRef(new Animated.Value(1)).current;
   // Android blurs only what is inside a BlurTargetView: the whole cooking screen
@@ -121,7 +123,14 @@ export const CookingModeModal = ({
     if (!currentStep) return;
     spokenSteps.current.add(stepKey);
     Speech.stop();
-    Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, { language: 'vi-VN' });
+    const quiet = () => setIsSpeaking(false);
+    Speech.speak(`Bước ${currentStep.stepNumber}: ${currentStep.title}. ${currentStep.instruction}`, {
+      language: 'vi-VN',
+      onStart: () => setIsSpeaking(true),
+      onDone: quiet,
+      onStopped: quiet,
+      onError: quiet
+    });
   };
   // Auto-read a step the first time it is shown (after the countdown)
   useEffect(() => {
@@ -200,33 +209,34 @@ export const CookingModeModal = ({
       <View style={styles.root}>
       <BlurTargetView ref={blurTargetRef} style={styles.root}>
       <SafeAreaView style={styles.container}>
-        {/* Precision Header with Hairline Progress */}
+        {/* Header: close · step + progress (flexible, never overflows) · voice · AI */}
         <View style={styles.header}>
           <View style={styles.headerTopRow}>
-            <Pressable onPress={handleExit} style={styles.exitButton}>
-              <Text style={styles.exitText}>✕ ĐÓNG</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Đóng chế độ nấu" hitSlop={6} onPress={handleExit} style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}>
+              <Text style={styles.iconButtonText}>✕</Text>
             </Pressable>
 
-            <Pressable onPress={toggleVoice} style={styles.exitButton}>
-              <Text style={styles.exitText}>{voiceEnabled ? '🔊 TẮT ĐỌC' : '🔊 ĐỌC TỰ ĐỘNG'}</Text>
+            <View style={styles.headerCenter}>
+              <View style={styles.phaseRow}>
+                <View style={styles.livePulse} />
+                <Text style={styles.phaseText} numberOfLines={1}>
+                  BƯỚC {pad2(safeStepIndex + 1)} / {pad2(totalSteps)}
+                  <Text style={styles.percentText}>  ·  {progressPercent}%</Text>
+                </Text>
+              </View>
+              <Text style={styles.headerRecipe} numberOfLines={1}>{recipe.title}</Text>
+            </View>
+
+            <Pressable accessibilityRole="switch" accessibilityState={{ checked: voiceEnabled }} accessibilityLabel={voiceEnabled ? 'Tắt đọc tự động' : 'Bật đọc tự động'} hitSlop={6} onPress={toggleVoice} style={({ pressed }) => [styles.iconButton, voiceEnabled && styles.iconButtonOn, pressed && styles.iconButtonPressed]}>
+              <Text style={styles.iconButtonText}>{voiceEnabled ? '🔊' : '🔇'}</Text>
             </Pressable>
 
-            <View style={styles.phaseBadge}>
-              <View style={styles.livePulse} />
-              <Text style={styles.phaseText}>
-                GIAI ĐOẠN {pad2(safeStepIndex + 1)} // {pad2(totalSteps)}
-              </Text>
-            </View>
-
-            <View style={styles.headerRight}>
-              <Pressable onPress={() => setIsAiChatVisible(true)} style={styles.aiButton}>
-                <Text style={styles.aiButtonText}>🤖 AI</Text>
-              </Pressable>
-              <Text style={styles.percentText}>{progressPercent}%</Text>
-            </View>
+            <Pressable accessibilityRole="button" accessibilityLabel="Hỏi trợ lý AI" hitSlop={6} onPress={() => setIsAiChatVisible(true)} style={({ pressed }) => [styles.aiButton, pressed && styles.iconButtonPressed]}>
+              <Text style={styles.aiButtonText}>🤖 AI</Text>
+            </Pressable>
           </View>
 
-          {/* Hairline Progress Track */}
+          {/* Progress Track */}
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, {
             width: `${progressPercent}%`
@@ -250,9 +260,15 @@ export const CookingModeModal = ({
 
             <Text style={styles.stepTitle}>{currentStep.title}</Text>
             <Text style={styles.stepInstruction}>{currentStep.instruction}</Text>
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-              <Pressable onPress={() => { Speech.stop(); setVoiceEnabled(false); }} style={styles.voiceControl}><Text style={styles.voiceControlText}>Dừng đọc</Text></Pressable>
-              <Pressable onPress={speakCurrentStep} style={styles.voiceControl}><Text style={styles.voiceControlText}>Nghe lại</Text></Pressable>
+            <View style={styles.voiceRow}>
+              <Pressable accessibilityRole="button" accessibilityState={{ disabled: !isSpeaking }} disabled={!isSpeaking} onPress={() => { Speech.stop(); setIsSpeaking(false); setVoiceEnabled(false); }} style={({ pressed }) => [styles.voiceControl, !isSpeaking && styles.voiceControlIdle, pressed && styles.iconButtonPressed]}>
+                <Text style={styles.voiceControlIcon}>⏹</Text>
+                <Text style={styles.voiceControlText}>Dừng đọc</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" onPress={speakCurrentStep} style={({ pressed }) => [styles.voiceControl, styles.voiceControlPrimary, pressed && styles.iconButtonPressed]}>
+                <Text style={styles.voiceControlIcon}>🔁</Text>
+                <Text style={[styles.voiceControlText, styles.voiceControlTextPrimary]}>Nghe lại</Text>
+              </Pressable>
             </View>
 
             {/* A step without a timer in the recipe can still get one, on demand */}
@@ -581,35 +597,79 @@ const styles = StyleSheet.create({
   headerTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingBottom: 14
+    gap: 10,
+    paddingBottom: 12
   },
-  exitButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: Radius.full,
+  iconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: HeronColors.cardAlt,
     borderWidth: 1,
-    borderColor: HeronColors.border
+    borderColor: HeronColors.border,
+    alignItems: 'center',
+    justifyContent: 'center'
   },
-  exitText: {
-    fontSize: 11,
+  iconButtonOn: {
+    backgroundColor: HeronColors.brandLight,
+    borderColor: '#FFD8CF'
+  },
+  iconButtonPressed: {
+    opacity: 0.7
+  },
+  iconButtonText: {
+    fontSize: 16,
     fontWeight: '800',
-    color: HeronColors.secondary,
-    letterSpacing: 0.5
+    color: HeronColors.primary
   },
-  voiceControl: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: Radius.full, backgroundColor: HeronColors.cardAlt },
-  voiceControlText: { color: HeronColors.primary, fontSize: 12, fontWeight: '700' },
-  phaseBadge: {
+  headerCenter: {
+    flex: 1,
+    minWidth: 0
+  },
+  phaseRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.full,
-    backgroundColor: HeronColors.cardAlt,
+    gap: 6
+  },
+  headerRecipe: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '600',
+    color: HeronColors.granite
+  },
+  voiceRow: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  voiceControl: {
+    flex: 1,
+    height: 44,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: HeronColors.borderLight
+    borderColor: HeronColors.border,
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8
+  },
+  voiceControlIdle: {
+    opacity: 0.45
+  },
+  voiceControlPrimary: {
+    backgroundColor: HeronColors.brandLight,
+    borderColor: '#FFD8CF'
+  },
+  voiceControlIcon: {
+    fontSize: 15
+  },
+  voiceControlText: {
+    color: HeronColors.primary,
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  voiceControlTextPrimary: {
+    color: HeronColors.brand
   },
   livePulse: {
     width: 6,
@@ -618,19 +678,16 @@ const styles = StyleSheet.create({
     backgroundColor: HeronColors.brand
   },
   phaseText: {
-    fontSize: 11,
+    flexShrink: 1,
+    fontSize: 13,
     fontWeight: '900',
     color: HeronColors.primary,
-    letterSpacing: 0.8
-  },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8
+    letterSpacing: 0.6
   },
   aiButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    height: 40,
+    paddingHorizontal: 14,
+    justifyContent: 'center',
     borderRadius: Radius.full,
     backgroundColor: HeronColors.brandLight,
     borderWidth: 1,
@@ -643,18 +700,21 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4
   },
   percentText: {
-    fontSize: 12,
     fontWeight: '900',
     color: HeronColors.brand,
     fontVariant: ['tabular-nums']
   },
   progressTrack: {
-    height: 3,
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
     backgroundColor: HeronColors.borderLight,
-    width: '100%'
+    width: '100%',
+    marginBottom: 10
   },
   progressFill: {
     height: '100%',
+    borderRadius: 2,
     backgroundColor: HeronColors.brand
   },
   scrollContent: {
@@ -732,7 +792,7 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 1,
     borderColor: HeronColors.border,
-    marginBottom: 18
+    marginTop: 16
   },
   tipHeader: {
     marginBottom: 4
@@ -749,9 +809,7 @@ const styles = StyleSheet.create({
     color: HeronColors.primary
   },
   timerSection: {
-    borderTopWidth: 1,
-    borderTopColor: HeronColors.borderLight,
-    paddingTop: 16,
+    marginTop: 24,
     alignItems: 'center'
   },
   timerSectionHeader: {
