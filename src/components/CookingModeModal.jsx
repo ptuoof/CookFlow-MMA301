@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Modal, View, Text, StyleSheet, ScrollView, Pressable, Platform, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { BlurTargetView, BlurView } from 'expo-blur';
 import { HeronColors, Radius, HeronShadow, Spacing } from '../constants/theme';
 import { TimerCircle } from './ui/TimerCircle';
 import { StepVideoPlayer } from './ui/StepVideoPlayer';
@@ -43,6 +44,8 @@ export const CookingModeModal = ({
   const spokenSteps = useRef(new Set());
   const [countLeft, setCountLeft] = useState(COUNTDOWN_SECONDS);
   const countScale = useRef(new Animated.Value(1)).current;
+  // Android blurs only what is inside a BlurTargetView: the whole cooking screen
+  const blurTargetRef = useRef(null);
   const [showIngredients, setShowIngredients] = useState(false);
   // Pantry entries the user marks as used up when the dish is done
   const [usedUp, setUsedUp] = useState({});
@@ -93,9 +96,11 @@ export const CookingModeModal = ({
   // timer tick, so its callback is read through a ref: the countdown never restarts on a re-render.
   const countdownDoneRef = useRef(onCountdownDone);
   countdownDoneRef.current = onCountdownDone;
+  // Reset while no countdown runs, so the next one always starts from 5 (resetting when it starts
+  // would race with the effect below, which would still see the last countdown's 0 and end at once)
   useEffect(() => {
-    if (visible && countdown) setCountLeft(COUNTDOWN_SECONDS);
-  }, [visible, countdown]);
+    if (!countdown) setCountLeft(COUNTDOWN_SECONDS);
+  }, [countdown]);
   useEffect(() => {
     if (!visible || !countdown) return undefined;
     if (countLeft <= 0) {
@@ -189,6 +194,8 @@ export const CookingModeModal = ({
     onClose();
   };
   return <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" transparent={false} onRequestClose={handleExit}>
+      <View style={styles.root}>
+      <BlurTargetView ref={blurTargetRef} style={styles.root}>
       <SafeAreaView style={styles.container}>
         {/* Precision Header with Hairline Progress */}
         <View style={styles.header}>
@@ -321,20 +328,6 @@ export const CookingModeModal = ({
           </Pressable>
         </View>
 
-        {/* "Get ready" countdown of a new cooking session */}
-        {countdown ? <View style={styles.countdownOverlay}>
-            <Text style={styles.countdownTag}>CHUẨN BỊ VÀO BẾP</Text>
-            <Text style={styles.countdownRecipe} numberOfLines={2}>{recipe.title}</Text>
-            <Text style={styles.countdownMeta}>{servings} người • {totalSteps} bước</Text>
-            <Animated.View style={[styles.countdownCircle, { transform: [{ scale: countScale }] }]}>
-              <Text style={styles.countdownNumber}>{Math.max(countLeft, 1)}</Text>
-            </Animated.View>
-            <Text style={styles.countdownHint}>Rửa tay, bày nguyên liệu ra bàn — CookFlow sẽ đọc từng bước cho bạn.</Text>
-            <Pressable accessibilityRole="button" onPress={() => countdownDoneRef.current?.()} style={({ pressed }) => [styles.countdownSkip, pressed && { opacity: 0.8 }]}>
-              <Text style={styles.countdownSkipText}>Bắt đầu ngay ›</Text>
-            </Pressable>
-          </View> : null}
-
         {/* Overlay Chúc mừng hoàn thành món ăn */}
         {isCelebrationVisible && <View style={styles.celebrationOverlay}>
             {/* Scrolls on small screens: rating, note and pantry choices make the card tall */}
@@ -387,69 +380,61 @@ export const CookingModeModal = ({
 
         <AiChefChatModal visible={isAiChatVisible} onClose={() => setIsAiChatVisible(false)} recipe={recipe} currentStep={currentStep} servings={servings} />
       </SafeAreaView>
+      </BlurTargetView>
+
+      {/* "Get ready" countdown of a new cooking session: one big number over the blurred cooking screen */}
+      {/* Our own absolute layer: BlurView only paints the background (its own style is not relied on) */}
+      {countdown ? <View style={styles.countdownOverlay}>
+          <BlurView blurTarget={blurTargetRef} blurMethod="dimezisBlurViewSdk31Plus" intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
+          <Animated.Text accessibilityLiveRegion="polite" style={[styles.countdownNumber, { transform: [{ scale: countScale }] }]}>
+            {Math.max(countLeft, 1)}
+          </Animated.Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Bỏ qua đếm ngược" onPress={() => countdownDoneRef.current?.()} style={({ pressed }) => [styles.countdownSkip, pressed && { opacity: 0.8 }]}>
+            <Text style={styles.countdownSkipText}>Bỏ qua ›</Text>
+          </Pressable>
+        </View> : null}
+      </View>
     </Modal>;
 };
 const styles = StyleSheet.create({
   videoSection: {
     marginTop: 16
   },
+  root: {
+    flex: 1
+  },
   countdownOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 20,
-    backgroundColor: HeronColors.primary,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 30,
+    elevation: 30,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 32
-  },
-  countdownTag: {
-    color: HeronColors.brand,
-    fontSize: 13,
-    fontWeight: '900',
-    letterSpacing: 2
-  },
-  countdownRecipe: {
-    marginTop: 12,
-    color: '#FFFFFF',
-    fontSize: 26,
-    lineHeight: 32,
-    fontWeight: '800',
-    textAlign: 'center'
-  },
-  countdownMeta: {
-    marginTop: 6,
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 14,
-    fontWeight: '600'
-  },
-  countdownCircle: {
-    marginTop: 40,
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    borderWidth: 6,
-    borderColor: HeronColors.brand,
-    alignItems: 'center',
-    justifyContent: 'center'
+    // Android "none" blur fallback / web: still dims the screen behind
+    backgroundColor: 'rgba(0,0,0,0.25)'
   },
   countdownNumber: {
     color: '#FFFFFF',
-    fontSize: 96,
+    fontSize: 200,
+    lineHeight: 220,
     fontWeight: '900',
-    fontVariant: ['tabular-nums']
-  },
-  countdownHint: {
-    marginTop: 36,
-    color: 'rgba(255,255,255,0.75)',
-    fontSize: 14,
-    lineHeight: 20,
-    textAlign: 'center'
+    fontVariant: ['tabular-nums'],
+    textShadowColor: 'rgba(0,0,0,0.35)',
+    textShadowOffset: { width: 0, height: 4 },
+    textShadowRadius: 16
   },
   countdownSkip: {
-    marginTop: 28,
+    position: 'absolute',
+    bottom: 72,
     minHeight: 48,
-    paddingHorizontal: 28,
+    paddingHorizontal: 32,
     borderRadius: Radius.full,
-    backgroundColor: HeronColors.brand,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.45)',
     alignItems: 'center',
     justifyContent: 'center'
   },
