@@ -36,7 +36,8 @@ export const CookingModeModal = ({
   const [rating, setRating] = useState(0);
   const [note, setNote] = useState('');
   const [isCelebrationVisible, setIsCelebrationVisible] = useState(false);
-  const [viewMode, setViewMode] = useState('video');
+  // Timer on demand for a step that has none in the recipe
+  const [showCustomTimer, setShowCustomTimer] = useState(false);
   const [isAiChatVisible, setIsAiChatVisible] = useState(false);
   // Each step is read aloud automatically the first time it is shown in a cooking session
   // ("Nghe lại" reads it again); the header button turns that off / on
@@ -56,6 +57,8 @@ export const CookingModeModal = ({
   const isLastStep = safeStepIndex === totalSteps - 1;
   const recipeTimers = timers.filter(timer => timer.recipeId === recipe?.id);
   const currentStepTimer = recipe && currentStep ? getStepTimer(recipe.id, currentStep.id) : null;
+  // Recipe timer, a timer the user added, or one still counting for this step (e.g. after coming back)
+  const showTimer = !!(currentStep?.timerSeconds || showCustomTimer || currentStepTimer);
   // Servings chosen on the detail screen: ingredient amounts and the AI follow them
   const servings = cookingSession?.servings ?? recipe?.servings ?? 1;
   const ratio = servings / Math.max(1, recipe?.servings || 1);
@@ -63,15 +66,15 @@ export const CookingModeModal = ({
   useEffect(() => {
     setVoiceEnabled(true);
     setIsCelebrationVisible(false);
-    setViewMode('video');
+    setShowCustomTimer(false);
     setShowIngredients(false);
     setUsedUp({});
     setRating(0);
     setNote('');
   }, [recipe?.id]);
-  // Optional custom timer tab only applies to the step where it was opened
+  // A timer added on demand only applies to the step where it was added
   useEffect(() => {
-    setViewMode('video');
+    setShowCustomTimer(false);
   }, [safeStepIndex]);
   // Every step (and every return to Cooking Mode) starts on its instructions + timer, even if the
   // user had scrolled down to the ingredients or the video
@@ -236,21 +239,6 @@ export const CookingModeModal = ({
         flex: 1,
         width: '100%'
       }} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-          {/* View Mode Switcher: Video vs Timer */}
-          <View style={styles.modeSwitcher}>
-            <Pressable onPress={() => setViewMode('video')} style={[styles.modeBtn, viewMode === 'video' && styles.modeBtnActive]}>
-              <Text style={[styles.modeBtnText, viewMode === 'video' && styles.modeBtnTextActive]}>
-                📝 HƯỚNG DẪN CHI TIẾT
-              </Text>
-            </Pressable>
-
-            <Pressable onPress={() => setViewMode('timer')} style={[styles.modeBtn, viewMode === 'timer' && styles.modeBtnActive]}>
-              <Text style={[styles.modeBtnText, viewMode === 'timer' && styles.modeBtnTextActive]}>
-                ⏱ ĐẾM GIỜ BƯỚC NÀY {currentStep.timerSeconds ? `(${Math.floor(currentStep.timerSeconds / 60)}P)` : ''}
-              </Text>
-            </Pressable>
-          </View>
-
           {/* Main Step Card */}
           <View style={styles.stepCard}>
             <View style={styles.stepMetaRow}>
@@ -267,6 +255,11 @@ export const CookingModeModal = ({
               <Pressable onPress={speakCurrentStep} style={styles.voiceControl}><Text style={styles.voiceControlText}>Nghe lại</Text></Pressable>
             </View>
 
+            {/* A step without a timer in the recipe can still get one, on demand */}
+            {!showTimer ? <Pressable accessibilityRole="button" onPress={() => setShowCustomTimer(true)} style={({ pressed }) => [styles.addTimerBtn, pressed && { opacity: 0.8 }]}>
+                <Text style={styles.addTimerText}>⏱ Thêm hẹn giờ cho bước này</Text>
+              </Pressable> : null}
+
             {/* Mẹo nhỏ (Tip) */}
             {currentStep.tip ? <View style={styles.tipBox}>
                 <View style={styles.tipHeader}>
@@ -275,13 +268,16 @@ export const CookingModeModal = ({
                 <Text style={styles.tipText}>{currentStep.tip}</Text>
               </View> : null}
 
-            {/* Bộ đếm giờ Timer đếm ngược (nếu bước có timerSeconds hoặc user chọn tab timer) */}
-            {currentStep.timerSeconds || viewMode === 'timer' ? <View style={styles.timerSection}>
+            {/* Step timer: the recipe's own, or one the user added (always shown while it exists) */}
+            {showTimer ? <View style={styles.timerSection}>
                 <View style={styles.timerSectionHeader}>
                   <View style={styles.timerSectionDot} />
                   <Text style={styles.timerSectionTitle}>
-                    BỘ ĐẾM GIỜ CHUẨN XÁC CHO GIAI ĐOẠN NÀY
+                    {currentStep.timerSeconds ? 'BỘ ĐẾM GIỜ CHUẨN XÁC CHO GIAI ĐOẠN NÀY' : 'HẸN GIỜ TỰ CHỌN CHO BƯỚC NÀY'}
                   </Text>
+                  {!currentStep.timerSeconds && !currentStepTimer ? <Pressable accessibilityRole="button" accessibilityLabel="Ẩn hẹn giờ" hitSlop={8} onPress={() => setShowCustomTimer(false)}>
+                      <Text style={styles.hideTimerText}>Ẩn</Text>
+                    </Pressable> : null}
                 </View>
 
                 <TimerCircle key={`timer_${recipe.id}_${safeStepIndex}`} recipe={recipe} stepIndex={safeStepIndex} defaultSeconds={currentStep.timerSeconds || 180} />
@@ -666,34 +662,28 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'stretch'
   },
-  modeSwitcher: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
+  addTimerBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 14,
+    minHeight: 40,
+    paddingHorizontal: 16,
     borderRadius: Radius.full,
-    padding: 3,
     borderWidth: 1,
-    borderColor: HeronColors.border,
-    marginBottom: 16,
-    width: '100%'
-  },
-  modeBtn: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: Radius.full,
+    borderColor: HeronColors.brand,
+    backgroundColor: '#FFF4F0',
     alignItems: 'center',
     justifyContent: 'center'
   },
-  modeBtnActive: {
-    backgroundColor: HeronColors.primary
+  addTimerText: {
+    color: HeronColors.brand,
+    fontSize: 13,
+    fontWeight: '800'
   },
-  modeBtnText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: HeronColors.surface,
-    letterSpacing: 0.5
-  },
-  modeBtnTextActive: {
-    color: '#FFFFFF'
+  hideTimerText: {
+    marginLeft: 'auto',
+    color: HeronColors.granite,
+    fontSize: 12,
+    fontWeight: '700'
   },
   stepCard: {
     width: '100%',
