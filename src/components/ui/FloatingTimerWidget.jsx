@@ -4,12 +4,14 @@ import { useRecipes } from '../../context/RecipeContext';
 import { HeronColors } from '../../constants/theme';
 import { formatTimer } from './TimerCircle';
 import { sortTimers } from '../../utils/timers';
+import { confirmAction } from '../../utils/dialog';
 
 // Pinned above the bottom dock on every tab while Cooking Mode is closed, like the "now playing"
 // bar of a music app, so a dish in progress is never lost:
 //  - step timers (running, paused or just finished) come first: a paused timer is never "lost" and a
 //    finished one can be acknowledged. With several timers it shows the one that needs attention
-//    first (soonest to finish) and how many others there are;
+//    first (soonest to finish) and how many others there are. ✕ dismisses it in one tap (with a
+//    confirmation while time is left);
 //  - with no timer left but a cooking session still open, it shows the dish and its step: tap to go
 //    back to that step, ✕ to end the session.
 export const FloatingTimerWidget = ({ onPress, onOpenSession, onEndSession, bottomOffset = 100 }) => {
@@ -45,6 +47,18 @@ export const FloatingTimerWidget = ({ onPress, onOpenSession, onEndSession, bott
   const [timer, ...others] = sortTimers(timers);
   const { status } = timer;
   const label = status === 'done' ? '✓ Hết giờ' : `${status === 'paused' ? '⏸' : '⏱'} ${formatTimer(timer.secondsLeft)}`;
+  // ✕ is always there: a finished timer goes at once, one with time left asks first (no need to pause it before)
+  const dismissTimer = () => {
+    if (status === 'done') return clearTimer(timer.id);
+    return confirmAction({
+      title: status === 'running' ? 'Tắt timer đang chạy?' : 'Tắt timer đang tạm dừng?',
+      message: `"${timer.stepTitle || timer.recipeTitle}" còn ${formatTimer(timer.secondsLeft)}. Timer sẽ bị xóa, tiến độ nấu món vẫn được giữ.`,
+      confirmText: 'Tắt timer',
+      cancelText: 'Giữ lại',
+      destructive: true,
+      onConfirm: () => clearTimer(timer.id)
+    });
+  };
 
   return (
     <View pointerEvents="box-none" style={[styles.wrap, { bottom: bottomOffset }]}>
@@ -59,9 +73,9 @@ export const FloatingTimerWidget = ({ onPress, onOpenSession, onEndSession, bott
           <Text style={styles.step} numberOfLines={1}>• {timer.stepTitle || timer.recipeTitle}</Text>
           {others.length ? <View style={styles.more}><Text style={styles.moreText}>+{others.length}</Text></View> : null}
         </Pressable>
-        {status !== 'running' ? <Pressable accessibilityRole="button" accessibilityLabel="Tắt timer" hitSlop={8} onPress={() => clearTimer(timer.id)} style={styles.close}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Tắt timer" hitSlop={8} onPress={dismissTimer} style={styles.close}>
           <Text style={styles.closeText}>✕</Text>
-        </Pressable> : null}
+        </Pressable>
       </View>
     </View>
   );

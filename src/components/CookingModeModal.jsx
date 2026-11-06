@@ -131,7 +131,7 @@ export const CookingModeModal = ({
       title: 'Tạm rời chế độ nấu?',
       message: activeTimers.length
         ? `${activeTimers.map(timer => `Timer "${timer.stepTitle}" (${formatTimer(timer.secondsLeft)})`).join(', ')} vẫn tiếp tục chạy. Bạn có thể mở lại từ thanh timer ở màn hình chính.`
-        : `Tiến độ (bước ${safeStepIndex + 1}/${totalSteps}) được lưu lại, kể cả khi tắt ứng dụng. Mở lại từ thẻ "Đang nấu dở" ở màn hình chính.`,
+        : `Tiến độ (bước ${safeStepIndex + 1}/${totalSteps}) được lưu lại, kể cả khi tắt ứng dụng. Mở lại từ thanh "Đang nấu dở" phía trên thanh menu.`,
       confirmText: 'Rời đi',
       cancelText: 'Tiếp tục nấu',
       onConfirm: () => {
