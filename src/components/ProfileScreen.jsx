@@ -89,59 +89,96 @@ export const ProfileScreen = ({ view, onChangeView, onSelectRecipe, onEditRecipe
       </View>;
   }
 
-  const menu = [
-    { icon: '📒', label: 'Món của tôi', detail: `${favoriteIds.length} đã lưu • ${recipes.filter(r => r.isCustom && r.isOwner).length} tự tạo`, onPress: () => onChangeView('myRecipes') },
-    { icon: '🧊', label: 'Tủ lạnh nhà tôi', detail: pantryIngredients.length ? `${pantryIngredients.length} nguyên liệu • xem món nấu được` : 'Chọn nguyên liệu đang có để tìm món', onPress: onOpenPantry },
-    { icon: '📮', label: 'Yêu cầu & báo cáo công thức', detail: unreadReplies ? `${unreadReplies} phản hồi từ quản trị viên` : `${myRequests.length} yêu cầu đã gửi`, onPress: () => onChangeView('requests'), badge: unreadReplies },
-    { icon: '✍️', label: 'Gửi yêu cầu công thức mới', detail: 'Món bạn muốn CookFlow bổ sung', onPress: () => setIsRequestVisible(true) },
-    { icon: '📷', label: 'Quét QR công thức', detail: 'Nhận công thức bạn bè chia sẻ', onPress: onOpenQr },
-    { icon: '⚙️', label: 'Cài đặt', detail: 'Dị ứng, hẹn giờ, sao lưu dữ liệu', onPress: onOpenSettings },
-    { icon: '🔒', label: 'Đổi mật khẩu', detail: 'Bảo mật tài khoản', onPress: () => setIsPasswordVisible(true) }
+  const myRecipeCount = recipes.filter(r => r.isCustom && r.isOwner).length;
+  const sections = [
+    {
+      title: 'Bếp của tôi',
+      items: [
+        { icon: '📒', tint: HeronColors.amberLight, label: 'Món của tôi', detail: `${favoriteIds.length} đã lưu • ${myRecipeCount} tự tạo`, onPress: () => onChangeView('myRecipes') },
+        { icon: '🧊', tint: HeronColors.blueLight, label: 'Tủ lạnh nhà tôi', detail: pantryIngredients.length ? `${pantryIngredients.length} nguyên liệu • xem món nấu được` : 'Chọn nguyên liệu đang có để tìm món', onPress: onOpenPantry }
+      ]
+    },
+    {
+      title: 'Cộng đồng',
+      items: [
+        { icon: '📮', tint: HeronColors.brandLight, label: 'Yêu cầu & báo cáo', detail: unreadReplies ? `${unreadReplies} phản hồi mới từ quản trị viên` : `${myRequests.length} yêu cầu đã gửi`, onPress: () => onChangeView('requests'), badge: unreadReplies },
+        { icon: '✍️', tint: HeronColors.emeraldLight, label: 'Gửi yêu cầu công thức mới', detail: 'Món bạn muốn CookFlow bổ sung', onPress: () => setIsRequestVisible(true) },
+        { icon: '📷', tint: HeronColors.cardAlt, label: 'Quét QR công thức', detail: 'Nhận công thức bạn bè chia sẻ', onPress: onOpenQr }
+      ]
+    },
+    {
+      title: 'Tài khoản',
+      items: [
+        { icon: '⚙️', tint: HeronColors.cardAlt, label: 'Cài đặt', detail: 'Dị ứng, hẹn giờ, sao lưu dữ liệu', onPress: onOpenSettings },
+        { icon: '🔒', tint: HeronColors.cardAlt, label: 'Đổi mật khẩu', detail: 'Bảo mật tài khoản', onPress: () => setIsPasswordVisible(true) }
+      ]
+    }
   ];
+  const stats = [[cookHistory.length, 'Lần nấu'], [favoriteIds.length, 'Món đã lưu'], [streak, 'Ngày liên tục']];
 
   return <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-      <Text style={styles.tag}>HỒ SƠ // TÀI KHOẢN</Text>
-      <View style={styles.profileCard}>
-        <View style={styles.avatar}><Text style={styles.avatarText}>{initialsOf(user?.name)}</Text></View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.name} numberOfLines={1}>{user?.name}</Text>
-          <Text style={styles.email} numberOfLines={1}>{user?.email}</Text>
-        </View>
-        <Pressable accessibilityRole="button" onPress={() => setIsEditVisible(true)} style={styles.editBtn}><Text style={styles.editText}>Sửa</Text></Pressable>
-      </View>
+      <Text style={styles.tag}>CÁ NHÂN</Text>
+      <Text style={styles.pageTitle}>Hồ sơ</Text>
 
-      <View style={styles.statsRow}>
-        {[[cookHistory.length, 'lần nấu'], [favoriteIds.length, 'món đã lưu'], [streak, 'ngày liên tục']].map(([value, label]) => <View key={label} style={styles.stat}>
-            <Text style={styles.statValue}>{value}</Text>
-            <Text style={styles.statLabel}>{label}</Text>
-          </View>)}
+      <View style={styles.profileCard}>
+        {/* Decorative glow, behind the content */}
+        <View pointerEvents="none" style={styles.glow} />
+        <View style={styles.profileTop}>
+          <View style={styles.avatar}><Text style={styles.avatarText}>{initialsOf(user?.name)}</Text></View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.name} numberOfLines={1}>{user?.name}</Text>
+            <Text style={styles.email} numberOfLines={1}>{user?.email}</Text>
+            {user?.verified ? <View style={styles.verified}><Text style={styles.verifiedText}>✓ Đã xác minh</Text></View> : null}
+          </View>
+          <Pressable accessibilityRole="button" accessibilityLabel="Sửa hồ sơ" hitSlop={6} onPress={() => setIsEditVisible(true)} style={({ pressed }) => [styles.editBtn, pressed && { opacity: 0.7 }]}>
+            <Text style={styles.editText}>✎ Sửa</Text>
+          </Pressable>
+        </View>
+        <View style={styles.statsRow}>
+          {stats.map(([value, label], index) => <View key={label} style={[styles.stat, index > 0 && styles.statDivider]}>
+              <Text style={styles.statValue}>{value}</Text>
+              <Text style={styles.statLabel}>{label}</Text>
+            </View>)}
+        </View>
       </View>
 
       <View style={styles.goalCard}>
+        <View style={styles.goalIcon}><Text style={{ fontSize: 20 }}>🎯</Text></View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.goalLabel}>Mục tiêu calo mỗi ngày</Text>
-          <Text style={styles.goalHint}>Dùng cho thanh tiến độ ở Lịch ăn</Text>
+          <Text style={styles.goalLabel}>Mục tiêu calo / ngày</Text>
+          <Text style={styles.goalHint}>Thanh tiến độ ở Lịch ăn</Text>
         </View>
-        <Pressable accessibilityLabel="Giảm mục tiêu" disabled={goal <= CALORIE_GOAL_MIN} onPress={() => changeGoal(-100)} style={styles.goalBtn}><Text style={styles.goalBtnText}>−</Text></Pressable>
-        <Text style={styles.goalValue}>{goal.toLocaleString('vi-VN')}</Text>
-        <Pressable accessibilityLabel="Tăng mục tiêu" disabled={goal >= CALORIE_GOAL_MAX} onPress={() => changeGoal(100)} style={styles.goalBtn}><Text style={styles.goalBtnText}>+</Text></Pressable>
+        <View style={styles.stepper}>
+          <Pressable accessibilityLabel="Giảm mục tiêu" hitSlop={6} disabled={goal <= CALORIE_GOAL_MIN} onPress={() => changeGoal(-100)} style={({ pressed }) => [styles.goalBtn, goal <= CALORIE_GOAL_MIN && styles.goalBtnOff, pressed && { opacity: 0.7 }]}><Text style={styles.goalBtnText}>−</Text></Pressable>
+          <View style={styles.goalValueBox}>
+            <Text style={styles.goalValue}>{goal.toLocaleString('vi-VN')}</Text>
+            <Text style={styles.goalUnit}>kcal</Text>
+          </View>
+          <Pressable accessibilityLabel="Tăng mục tiêu" hitSlop={6} disabled={goal >= CALORIE_GOAL_MAX} onPress={() => changeGoal(100)} style={({ pressed }) => [styles.goalBtn, goal >= CALORIE_GOAL_MAX && styles.goalBtnOff, pressed && { opacity: 0.7 }]}><Text style={styles.goalBtnText}>+</Text></Pressable>
+        </View>
       </View>
 
-      <View style={styles.menuCard}>
-        {menu.map((item, index) => <Pressable key={item.label} accessibilityRole="button" onPress={item.onPress} style={({ pressed }) => [styles.menuRow, index > 0 && styles.menuDivider, pressed && { backgroundColor: HeronColors.cardAlt }]}>
-            <Text style={styles.menuIcon}>{item.icon}</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.menuLabel}>{item.label}</Text>
-              <Text style={styles.menuDetail} numberOfLines={1}>{item.detail}</Text>
-            </View>
-            {item.badge ? <View style={styles.menuBadge}><Text style={styles.menuBadgeText}>{item.badge}</Text></View> : null}
-            <Text style={styles.chevron}>›</Text>
-          </Pressable>)}
-      </View>
+      {sections.map(section => <View key={section.title}>
+          <Text style={styles.sectionTitle}>{section.title}</Text>
+          <View style={styles.menuCard}>
+            {section.items.map((item, index) => <Pressable key={item.label} accessibilityRole="button" onPress={item.onPress} style={({ pressed }) => [styles.menuRow, pressed && { backgroundColor: HeronColors.cardAlt }]}>
+                <View style={[styles.menuIconBox, { backgroundColor: item.tint }]}><Text style={styles.menuIcon}>{item.icon}</Text></View>
+                <View style={[styles.menuBody, index > 0 && styles.menuDivider]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.menuLabel} numberOfLines={1}>{item.label}</Text>
+                    <Text style={[styles.menuDetail, item.badge ? styles.menuDetailHot : null]} numberOfLines={1}>{item.detail}</Text>
+                  </View>
+                  {item.badge ? <View style={styles.menuBadge}><Text style={styles.menuBadgeText}>{item.badge}</Text></View> : null}
+                  <Text style={styles.chevron}>›</Text>
+                </View>
+              </Pressable>)}
+          </View>
+        </View>)}
 
-      <Pressable accessibilityRole="button" onPress={() => confirmAction({ title: 'Đăng xuất?', message: 'Dữ liệu nấu ăn vẫn được giữ trên máy này.', confirmText: 'Đăng xuất', destructive: true, onConfirm: signOut })} style={styles.logout}>
+      <Pressable accessibilityRole="button" onPress={() => confirmAction({ title: 'Đăng xuất?', message: 'Dữ liệu nấu ăn vẫn được giữ trên máy này.', confirmText: 'Đăng xuất', destructive: true, onConfirm: signOut })} style={({ pressed }) => [styles.logout, pressed && { opacity: 0.7 }]}>
         <Text style={styles.logoutText}>Đăng xuất</Text>
       </Pressable>
+      <Text style={styles.footer}>CookFlow • nấu ngon mỗi ngày</Text>
       <View style={{ height: 150 }} />
 
       <RequestRecipeModal visible={isRequestVisible} onClose={() => setIsRequestVisible(false)} />
@@ -151,9 +188,11 @@ export const ProfileScreen = ({ view, onChangeView, onSelectRecipe, onEditRecipe
 };
 
 const SubHeader = ({ title, onBack, action, onAction }) => <View style={styles.subHeader}>
-    <Pressable accessibilityRole="button" accessibilityLabel="Quay lại Hồ sơ" hitSlop={8} onPress={onBack} style={styles.backBtn}><Text style={styles.backText}>‹ Hồ sơ</Text></Pressable>
-    <Text style={styles.subTitle}>{title}</Text>
-    {action ? <Pressable hitSlop={8} onPress={onAction}><Text style={styles.subAction}>{action}</Text></Pressable> : <View style={{ width: 60 }} />}
+    <Pressable accessibilityRole="button" accessibilityLabel="Quay lại Hồ sơ" hitSlop={8} onPress={onBack} style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}>
+      <Text style={styles.backText}>‹</Text>
+    </Pressable>
+    <Text style={styles.subTitle} numberOfLines={1}>{title}</Text>
+    {action ? <Pressable accessibilityRole="button" hitSlop={8} onPress={onAction} style={({ pressed }) => [styles.subActionBtn, pressed && { opacity: 0.7 }]}><Text style={styles.subAction}>{action}</Text></Pressable> : <View style={styles.subSpacer} />}
   </View>;
 
 const FormModal = ({ visible, title, onClose, children }) => <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -223,40 +262,58 @@ const PasswordModal = ({ visible, onClose, onSave }) => {
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
-  tag: { fontSize: 10, fontWeight: '900', color: HeronColors.brand, letterSpacing: 1, marginBottom: 10 },
-  profileCard: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, borderRadius: Radius.lg, backgroundColor: HeronColors.primary, ...HeronShadow.card },
-  avatar: { width: 56, height: 56, borderRadius: 18, backgroundColor: HeronColors.brand, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: 20, fontWeight: '900', color: '#FFFFFF' },
-  name: { fontSize: 19, fontWeight: '900', color: '#FFFFFF' },
-  email: { fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 3 },
-  editBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: Radius.full, backgroundColor: 'rgba(255,255,255,0.14)' },
+  tag: { fontSize: 10, fontWeight: '900', color: HeronColors.brand, letterSpacing: 1 },
+  pageTitle: { fontSize: 26, fontWeight: '900', color: HeronColors.primary, letterSpacing: -0.8, marginBottom: Spacing.md },
+  profileCard: { borderRadius: 24, backgroundColor: HeronColors.primary, overflow: 'hidden', ...HeronShadow.card },
+  glow: { position: 'absolute', width: 260, height: 260, borderRadius: 130, right: -110, top: -150, backgroundColor: 'rgba(250,54,0,0.13)' },
+  profileTop: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 18, paddingBottom: 16 },
+  avatar: { width: 60, height: 60, borderRadius: 20, backgroundColor: HeronColors.brand, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: 'rgba(255,255,255,0.18)' },
+  avatarText: { fontSize: 21, fontWeight: '900', color: '#FFFFFF' },
+  name: { fontSize: 19, fontWeight: '900', color: '#FFFFFF', letterSpacing: -0.3 },
+  email: { fontSize: 12, color: 'rgba(255,255,255,0.65)', marginTop: 2 },
+  verified: { alignSelf: 'flex-start', marginTop: 7, paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radius.full, backgroundColor: 'rgba(43,138,62,0.25)' },
+  verifiedText: { fontSize: 10, fontWeight: '800', color: '#8CE99A' },
+  editBtn: { height: 34, paddingHorizontal: 14, justifyContent: 'center', borderRadius: Radius.full, backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)' },
   editText: { color: '#FFFFFF', fontWeight: '800', fontSize: 12 },
-  statsRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
-  stat: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: Radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border },
-  statValue: { fontSize: 20, fontWeight: '900', color: HeronColors.primary },
-  statLabel: { fontSize: 11, color: HeronColors.granite, marginTop: 2 },
-  goalCard: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, padding: 14, borderRadius: Radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border },
+  statsRow: { flexDirection: 'row', marginHorizontal: 12, marginBottom: 12, paddingVertical: 12, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.07)' },
+  stat: { flex: 1, alignItems: 'center' },
+  statDivider: { borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.12)' },
+  statValue: { fontSize: 20, fontWeight: '900', color: '#FFFFFF', fontVariant: ['tabular-nums'] },
+  statLabel: { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
+  goalCard: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14, padding: 14, borderRadius: Radius.lg, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border },
+  goalIcon: { width: 42, height: 42, borderRadius: 13, backgroundColor: HeronColors.brandLight, alignItems: 'center', justifyContent: 'center' },
   goalLabel: { fontSize: 14, fontWeight: '800', color: HeronColors.primary },
   goalHint: { fontSize: 11, color: HeronColors.granite, marginTop: 2 },
-  goalBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: HeronColors.brandLight, alignItems: 'center', justifyContent: 'center' },
-  goalBtnText: { fontSize: 18, fontWeight: '900', color: HeronColors.brandHover, lineHeight: 20 },
-  goalValue: { minWidth: 52, textAlign: 'center', fontSize: 16, fontWeight: '900', color: HeronColors.primary },
-  menuCard: { marginTop: 12, borderRadius: Radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, overflow: 'hidden' },
-  menuRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 13 },
+  stepper: { flexDirection: 'row', alignItems: 'center', padding: 4, borderRadius: Radius.full, backgroundColor: HeronColors.cardAlt, borderWidth: 1, borderColor: HeronColors.borderLight },
+  goalBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center', justifyContent: 'center' },
+  goalBtnOff: { opacity: 0.4 },
+  goalBtnText: { fontSize: 17, fontWeight: '900', color: HeronColors.brand, lineHeight: 20 },
+  goalValueBox: { minWidth: 58, alignItems: 'center' },
+  goalValue: { fontSize: 15, fontWeight: '900', color: HeronColors.primary, fontVariant: ['tabular-nums'] },
+  goalUnit: { fontSize: 9, fontWeight: '700', color: HeronColors.granite, marginTop: -1 },
+  sectionTitle: { fontSize: 12, fontWeight: '800', color: HeronColors.granite, marginTop: 20, marginBottom: 8, marginLeft: 4, textTransform: 'uppercase', letterSpacing: 0.6 },
+  menuCard: { borderRadius: Radius.lg, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, overflow: 'hidden' },
+  menuRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingLeft: 14 },
+  menuIconBox: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(0,0,0,0.04)' },
+  menuIcon: { fontSize: 18 },
+  menuBody: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 13, paddingRight: 14 },
   menuDivider: { borderTopWidth: 1, borderTopColor: HeronColors.borderLight },
-  menuIcon: { fontSize: 20, width: 28, textAlign: 'center' },
   menuLabel: { fontSize: 14, fontWeight: '800', color: HeronColors.primary },
-  menuDetail: { fontSize: 11, color: HeronColors.granite, marginTop: 2 },
+  menuDetail: { fontSize: 12, color: HeronColors.granite, marginTop: 2 },
+  menuDetailHot: { color: HeronColors.brand, fontWeight: '700' },
   menuBadge: { minWidth: 20, height: 20, borderRadius: 10, paddingHorizontal: 5, backgroundColor: HeronColors.brand, alignItems: 'center', justifyContent: 'center' },
   menuBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '900' },
-  chevron: { fontSize: 20, color: HeronColors.disable },
-  logout: { marginTop: 16, paddingVertical: 14, borderRadius: Radius.md, borderWidth: 1, borderColor: HeronColors.border, backgroundColor: '#FFFFFF', alignItems: 'center' },
-  logoutText: { fontSize: 14, fontWeight: '800', color: HeronColors.brand },
-  subHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: 10 },
-  backBtn: { width: 60 },
-  backText: { fontSize: 14, fontWeight: '800', color: HeronColors.brand },
-  subTitle: { fontSize: 17, fontWeight: '900', color: HeronColors.primary },
-  subAction: { fontSize: 13, fontWeight: '800', color: HeronColors.brand },
+  chevron: { fontSize: 22, color: HeronColors.disable, marginTop: -2 },
+  logout: { marginTop: 22, height: 50, borderRadius: Radius.lg, borderWidth: 1, borderColor: '#FFD8CF', backgroundColor: HeronColors.brandLight, alignItems: 'center', justifyContent: 'center' },
+  logoutText: { fontSize: 14, fontWeight: '800', color: HeronColors.brandHover },
+  footer: { marginTop: 14, textAlign: 'center', fontSize: 11, color: HeronColors.disable },
+  subHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: 14 },
+  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center', justifyContent: 'center' },
+  backText: { fontSize: 26, fontWeight: '600', color: HeronColors.primary, lineHeight: 28, marginTop: -2, marginLeft: -2 },
+  subTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '900', color: HeronColors.primary, letterSpacing: -0.3 },
+  subActionBtn: { height: 36, paddingHorizontal: 12, justifyContent: 'center', borderRadius: Radius.full, backgroundColor: HeronColors.brandLight, borderWidth: 1, borderColor: '#FFD8CF' },
+  subAction: { fontSize: 12, fontWeight: '800', color: HeronColors.brandHover },
+  subSpacer: { width: 40 },
   subContent: { paddingHorizontal: Spacing.lg, gap: 10 },
   emptyBox: { padding: 20, borderRadius: Radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center' },
   emptyTitle: { fontSize: 15, fontWeight: '800', color: HeronColors.primary },
