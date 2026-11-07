@@ -10,7 +10,7 @@ import { buildBackup } from '../utils/backup';
 import { confirmAction, showAlert } from '../utils/dialog';
 import { SERVINGS_MAX, SERVINGS_MIN } from '../constants/limits';
 import { ALL_CATEGORY, DEFAULT_CATEGORIES, setRecipeCategories, validateCategoryName } from '../utils/categories';
-import { makeMealEntry, sanitizeMealPlan } from '../utils/mealPlan';
+import { clampPortions, makeMealEntry, sanitizeMealPlan } from '../utils/mealPlan';
 import { buildRequest, sanitizeRequests } from '../utils/recipeRequests';
 import { sanitizeHistory } from '../utils/history';
 import { CALORIE_GOAL_MAX, CALORIE_GOAL_MIN, DEFAULT_CALORIE_GOAL } from '../utils/nutrition';
@@ -680,6 +680,7 @@ export const RecipeProvider = ({
         title: draft.title,
         calories: draft.calories,
         servings: draft.servings,
+        portionsEaten: draft.portionsEaten,
         eaten: typeof input.eaten === 'boolean' ? input.eaten : undefined,
         note: draft.note
       });
@@ -707,6 +708,8 @@ export const RecipeProvider = ({
     const entry = mealPlanRef.current.find(item => item.id === id);
     if (entry) patchMeal(id, { eaten: !entry.eaten });
   };
+  /** Portions the user ate of one dish (kcal = kcal per portion × portions). Cooked portions are untouched. */
+  const setMealPortions = (id, portions) => patchMeal(id, { portionsEaten: clampPortions(portions) });
   const deleteMealEntry = id => {
     const removed = mealPlanRef.current.find(entry => entry.id === id) || null;
     if (!removed) return null;
@@ -902,6 +905,7 @@ export const RecipeProvider = ({
     addMealEntry,
     updateMealEntry,
     toggleMealEaten,
+    setMealPortions,
     deleteMealEntry,
     copyMealDay,
     addPlanToShopping,

@@ -136,6 +136,12 @@ try {
   check(planned.eaten === false && planned.title === template.title, 'meal plan create (future = plan)', planned);
   const patched = await meal.updateMealEntry(planned.id, { eaten: true });
   check(patched.eaten === true, 'meal plan toggle eaten');
+  // Portions eaten (kcal) are separate from portions cooked (shopping)
+  const portions = await meal.updateMealEntry(planned.id, { portionsEaten: 1.5 });
+  check(planned.portionsEaten === 1 && portions.portionsEaten === 1.5 && portions.servings === 4, 'meal plan portions eaten (separate from servings)', portions);
+  const halfFree = await meal.createMealEntry({ date: tomorrow, slot: 'snack', title: 'Bánh mì', calories: 300, portionsEaten: 0.5 });
+  check(halfFree.portionsEaten === 0.5, 'meal plan create with portions eaten', halfFree);
+  await meal.deleteMealEntry(halfFree.id);
   await meal.updateMealEntry(planned.id, { eaten: false });
   const toShop = await meal.addPlanToShopping(tomorrow, tomorrow);
   check(toShop.dishes === 1 && toShop.added + toShop.merged > 0, 'plan -> shopping', toShop);

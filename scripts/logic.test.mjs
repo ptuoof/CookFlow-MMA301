@@ -294,6 +294,16 @@ test('meal plan dates and entries', () => {
   const get = id => (id === recipe.id ? recipe : null);
   const today = MP.mealsForDay([free], [], '2026-11-04', get);
   assert.equal(MP.dayCalories(today).planned, 450);
+  // kcal counts the portions the user ate, not the portions cooked (servings)
+  assert.equal(free.portionsEaten, 1);
+  const bigBatch = { ...future, date: '2026-11-04', calories: 520, servings: 16, portionsEaten: 1.5, eaten: true };
+  assert.equal(MP.mealKcal(bigBatch), 780);
+  assert.equal(MP.dayCalories(MP.mealsForDay([bigBatch], [], '2026-11-04', get)).eaten, 780);
+  assert.equal(MP.clampPortions(1.6), 1.5);
+  assert.equal(MP.clampPortions(0), 1);
+  assert.equal(MP.clampPortions(99), 10);
+  assert.equal(MP.formatPortions(0.25), '0,25');
+  assert.equal(MP.sanitizeMealPlan([{ ...free, portionsEaten: undefined }])[0].portionsEaten, 1);
   // Recipe dishes follow the recipe's kcal; cooked-mode history shows up on its day
   const finishedAt = new Date(2026, 10, 1, 19, 0).getTime();
   const day = MP.mealsForDay([past], [{ id: 'h1', recipeId: 'other', recipeTitle: 'Món khác', servings: 2, finishedAt }], '2026-11-01', get);

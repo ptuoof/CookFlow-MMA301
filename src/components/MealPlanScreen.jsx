@@ -9,8 +9,8 @@ import { matchesSearch } from '../utils/text';
 import { parseIntInRange } from '../utils/quantity';
 import { KCAL_MAX, goalProgress } from '../utils/nutrition';
 import {
-  MEAL_SLOTS, PLAN_DAYS_AHEAD, addDays, dateKey, dayCalories, dayKind, dayTitle, loggedDays,
-  mealsForDay, shortDate, weekOf, weekdayLabel
+  MEAL_SLOTS, PLAN_DAYS_AHEAD, PORTIONS_MAX, PORTIONS_MIN, PORTION_OPTIONS, addDays, clampPortions, dateKey,
+  dayCalories, dayKind, dayTitle, formatPortions, loggedDays, mealKcal, mealsForDay, shortDate, weekOf, weekdayLabel
 } from '../utils/mealPlan';
 
 const fmt = n => Math.round(n).toLocaleString('vi-VN');
@@ -21,12 +21,14 @@ const fmt = n => Math.round(n).toLocaleString('vi-VN');
  */
 export const MealPlanScreen = ({ onSelectRecipe }) => {
   const {
-    mealPlan, cookHistory, getRecipeById, settings, addMealEntry, toggleMealEaten,
+    mealPlan, cookHistory, getRecipeById, settings, addMealEntry, toggleMealEaten, setMealPortions,
     deleteMealEntry, copyMealDay, addPlanToShopping, addToShoppingList
   } = useRecipes();
   const today = dateKey();
   const [selected, setSelected] = useState(today);
   const [addingSlot, setAddingSlot] = useState(null);
+  // Dish whose "portions eaten" is being changed
+  const [portionMeal, setPortionMeal] = useState(null);
   const week = useMemo(() => weekOf(selected), [selected]);
   const kind = dayKind(selected, today);
   const goal = settings.calorieGoal || 2000;
@@ -83,6 +85,7 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
 
   const renderMeal = meal => {
     const recipe = meal.recipeId ? getRecipeById(meal.recipeId) : null;
+    const portions = clampPortions(meal.portionsEaten ?? 1);
     return <Pressable key={meal.id} disabled={!recipe} onPress={() => onSelectRecipe(recipe)} style={styles.mealRow}>
         {!meal.fromHistory ? <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: meal.eaten }} accessibilityLabel={meal.eaten ? 'Đánh dấu chưa ăn' : 'Đánh dấu đã ăn'} hitSlop={8} onPress={() => toggleMealEaten(meal.id)} style={[styles.check, meal.eaten && styles.checkOn]}>
             {meal.eaten ? <Text style={styles.checkMark}>✓</Text> : null}
@@ -90,12 +93,16 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
         <View style={{ flex: 1 }}>
           <Text style={[styles.mealTitle, !meal.eaten && kind === 'past' && styles.mealSkipped]} numberOfLines={1}>{meal.title}</Text>
           <Text style={styles.mealMeta} numberOfLines={1}>
-            {meal.calories ? `${fmt(meal.calories)} kcal` : 'Chưa có kcal'}
+            {/* kcal = kcal per portion × portions eaten; "nấu N phần" is how much was cooked (for shopping) */}
+            {meal.calories ? portions === 1 ? `${fmt(meal.calories)} kcal` : `${fmt(mealKcal(meal))} kcal (${formatPortions(portions)} × ${fmt(meal.calories)})` : 'Chưa có kcal'}
             {meal.fromHistory ? ' • nấu trong app' : meal.eaten ? ' • đã ăn' : kind === 'past' ? ' • bỏ qua' : ' • dự kiến'}
-            {meal.recipeId ? ` • ${meal.servings} phần` : ''}
+            {meal.recipeId && meal.servings > 1 ? ` • nấu ${meal.servings} phần` : ''}
             {meal.recipeId && !recipe ? ' • món đã bị xóa' : ''}
           </Text>
         </View>
+        {!meal.fromHistory ? <Pressable accessibilityRole="button" accessibilityLabel={`Số phần bạn ăn: ${formatPortions(portions)}. Chạm để đổi`} hitSlop={6} onPress={() => setPortionMeal(meal)} style={({ pressed }) => [styles.portionPill, portions !== 1 && styles.portionPillOn, pressed && { opacity: 0.7 }]}>
+            <Text style={[styles.portionText, portions !== 1 && styles.portionTextOn]}>×{formatPortions(portions)}</Text>
+          </Pressable> : null}
         {!meal.fromHistory ? <Pressable accessibilityLabel={`Xóa ${meal.title}`} hitSlop={8} onPress={() => handleDelete(meal)} style={({ pressed }) => [styles.removeBtn, pressed && { opacity: 0.6 }]}>
             <Text style={styles.remove}>✕</Text>
           </Pressable> : null}
@@ -175,7 +182,7 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
         {/* Slots */}
         {MEAL_SLOTS.map(slot => {
           const slotMeals = meals.filter(meal => meal.slot === slot.id);
-          const slotKcal = slotMeals.reduce((sum, meal) => sum + (meal.calories || 0), 0);
+          const slotKcal = slotMeals.reduce((sum, meal) => sum + mealKcal(meal), 0);
           return <View key={slot.id} style={styles.slotCard}>
               <View style={styles.slotHead}>
                 <View style={styles.slotIcon}><Text style={styles.slotIconText}>{slot.icon}</Text></View>
@@ -230,7 +237,112 @@ export const MealPlanScreen = ({ onSelectRecipe }) => {
           return true;
         }}
       />
+      <PortionSheet
+        meal={portionMeal}
+        onClose={() => setPortionMeal(null)}
+        onSave={portions => {
+          setMealPortions(portionMeal.id, portions);
+          setPortionMeal(null);
+        }}
+      />
     </View>;
+};
+
+/**
+ * "Bạn ăn mấy phần?" for one dish: type any number (2,25), use ±¼ steps or a quick choice
+ * (½, 1, 1½, 2, 3), with the kcal it gives. The cooked portions (for the shopping list) stay as they are.
+ */
+const parsePortions = text => {
+  const n = Number(String(text).trim().replace(',', '.'));
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+const PortionSheet = ({ meal, onClose, onSave }) => {
+  const [value, setValue] = useState(1);
+  // What is in the input while typing ("1," is fine until it is left)
+  const [text, setText] = useState('1');
+  const [forId, setForId] = useState(null);
+  // Start from the dish's current portions each time a dish is opened
+  if (meal && meal.id !== forId) {
+    const start = clampPortions(meal.portionsEaten ?? 1);
+    setForId(meal.id);
+    setValue(start);
+    setText(formatPortions(start));
+  } else if (!meal && forId !== null) {
+    setForId(null);
+  }
+  const choose = next => {
+    const clean = clampPortions(next);
+    setValue(clean);
+    setText(formatPortions(clean));
+  };
+  const step = delta => choose(Math.min(PORTIONS_MAX, Math.max(PORTIONS_MIN, value + delta)));
+  const handleType = input => {
+    const cleaned = input.replace(/[^0-9.,]/g, '').slice(0, 5);
+    setText(cleaned);
+    const n = parsePortions(cleaned);
+    if (n !== null) setValue(clampPortions(n));
+  };
+  const typed = parsePortions(text);
+  // Typed value outside the range or between quarters: say what will be saved
+  const adjusted = typed !== null && typed !== value;
+  const kcal = meal?.calories ? meal.calories * value : null;
+  const save = () => {
+    if (typed === null) {
+      showAlert('Số phần chưa hợp lệ', `Nhập số từ ${formatPortions(PORTIONS_MIN)} đến ${formatPortions(PORTIONS_MAX)}, ví dụ 1,5.`);
+      return;
+    }
+    onSave(value);
+  };
+  return <Modal visible={!!meal} transparent animationType="fade" statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
+      <KeyboardAvoidingView style={styles.sheetBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <Pressable accessibilityLabel="Đóng" style={StyleSheet.absoluteFill} onPress={onClose} />
+        {meal ? <View style={styles.sheetCard}>
+            <Text style={styles.tag}>🍽️ PHẦN ĂN</Text>
+            <Text style={styles.sheetTitle} numberOfLines={2}>Bạn ăn mấy phần?</Text>
+            <Text style={styles.sheetSub} numberOfLines={2}>{meal.title}{meal.calories ? ` • ${fmt(meal.calories)} kcal/phần` : ''}</Text>
+
+            <View style={styles.sheetStepper}>
+              <Pressable accessibilityLabel="Bớt ¼ phần" hitSlop={6} disabled={value <= PORTIONS_MIN} onPress={() => step(-0.25)} style={[styles.sheetStepBtn, value <= PORTIONS_MIN && { opacity: 0.35 }]}><Text style={styles.sheetStepText}>−</Text></Pressable>
+              <View style={styles.sheetInputBox}>
+                <TextInput
+                  accessibilityLabel="Nhập số phần bạn ăn"
+                  style={styles.sheetInput}
+                  value={text}
+                  onChangeText={handleType}
+                  onBlur={() => setText(formatPortions(value))}
+                  onSubmitEditing={save}
+                  keyboardType="decimal-pad"
+                  returnKeyType="done"
+                  selectTextOnFocus
+                  maxLength={5}
+                />
+                <Text style={styles.sheetUnit}>phần • chạm để nhập</Text>
+              </View>
+              <Pressable accessibilityLabel="Thêm ¼ phần" hitSlop={6} disabled={value >= PORTIONS_MAX} onPress={() => step(0.25)} style={[styles.sheetStepBtn, value >= PORTIONS_MAX && { opacity: 0.35 }]}><Text style={styles.sheetStepText}>+</Text></Pressable>
+            </View>
+            {adjusted ? <Text style={styles.sheetAdjust}>Sẽ lưu {formatPortions(value)} phần (làm tròn ¼, từ {formatPortions(PORTIONS_MIN)} đến {formatPortions(PORTIONS_MAX)})</Text> : null}
+            <View style={styles.sheetChips}>
+              {PORTION_OPTIONS.map(option => {
+                const active = value === option;
+                return <Pressable key={option} accessibilityRole="radio" accessibilityState={{ selected: active }} onPress={() => choose(option)} style={[styles.sheetChip, active && styles.sheetChipOn]}>
+                    <Text style={[styles.sheetChipText, active && styles.sheetChipTextOn]}>×{formatPortions(option)}</Text>
+                  </Pressable>;
+              })}
+            </View>
+
+            <View style={styles.sheetTotal}>
+              <Text style={styles.sheetTotalLabel}>Calo tính vào ngày</Text>
+              <Text style={styles.sheetTotalValue}>{kcal ? `${fmt(kcal)} kcal` : 'Chưa có kcal'}</Text>
+            </View>
+            {meal.recipeId && meal.servings > 1 ? <Text style={styles.sheetNote}>Số phần nấu ({meal.servings} phần) vẫn giữ nguyên cho giỏ đi chợ.</Text> : null}
+
+            <View style={styles.sheetActions}>
+              <AppleButton title="Hủy" variant="secondary" onPress={onClose} style={{ flex: 1 }} />
+              <AppleButton title="Lưu" onPress={save} style={{ flex: 1 }} />
+            </View>
+          </View> : null}
+      </KeyboardAvoidingView>
+    </Modal>;
 };
 
 const KCAL_PRESETS = [200, 350, 500, 700];
@@ -341,14 +453,14 @@ const AddMealModal = ({ visible, slot, date, isPast, onClose, onAdd }) => {
                   <View style={styles.pickPlus}><Text style={styles.pickPlusText}>＋</Text></View>
                 </Pressable>)}
               {!list.length ? <Text style={styles.empty}>Không tìm thấy món phù hợp.</Text> : null}
-              <Text style={styles.empty}>{`"${servings} phần" là số phần nấu — dùng khi đưa nguyên liệu vào giỏ đi chợ. Kcal được tính cho 1 người.`}</Text>
+              <Text style={styles.empty}>{`"${servings} phần" là số phần nấu (cho giỏ đi chợ). Calo tính theo số phần bạn ăn — mặc định 1, chạm “×1” trong Lịch ăn để đổi.`}</Text>
             </ScrollView>
           </> : <>
             <ScrollView contentContainerStyle={{ paddingHorizontal: Spacing.lg, paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
               <View style={styles.formCard}>
                 <Text style={styles.label}>Tên món</Text>
                 <TextInput style={styles.input} placeholder="Ví dụ: Phở bò ngoài hàng" placeholderTextColor={HeronColors.disable} value={freeTitle} onChangeText={setFreeTitle} maxLength={80} />
-                <Text style={styles.label}>Calo ước tính <Text style={styles.labelHint}>(kcal / người, tùy chọn)</Text></Text>
+                <Text style={styles.label}>Calo ước tính <Text style={styles.labelHint}>(kcal / phần, tùy chọn)</Text></Text>
                 <TextInput style={styles.input} keyboardType="numeric" placeholder="Ví dụ: 450" placeholderTextColor={HeronColors.disable} value={freeKcal} onChangeText={setFreeKcal} />
                 <View style={styles.presetRow}>
                   {KCAL_PRESETS.map(value => {
@@ -444,6 +556,31 @@ const styles = StyleSheet.create({
   mealTitle: { fontSize: 14, fontWeight: '700', color: HeronColors.primary },
   mealSkipped: { color: HeronColors.disable, textDecorationLine: 'line-through' },
   mealMeta: { fontSize: 11, color: HeronColors.granite, marginTop: 2 },
+  portionPill: { minWidth: 44, height: 30, paddingHorizontal: 8, marginRight: 6, borderRadius: Radius.full, backgroundColor: HeronColors.cardAlt, borderWidth: 1, borderColor: HeronColors.border, alignItems: 'center', justifyContent: 'center' },
+  portionPillOn: { backgroundColor: HeronColors.brandLight, borderColor: '#FFD8CF' },
+  portionText: { fontSize: 12, fontWeight: '800', color: HeronColors.secondary, fontVariant: ['tabular-nums'] },
+  portionTextOn: { color: HeronColors.brandHover },
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(17,17,17,0.5)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  sheetCard: { width: '100%', maxWidth: 400, backgroundColor: '#FFFFFF', borderRadius: 24, padding: 20, ...HeronShadow.card },
+  sheetTitle: { marginTop: 4, fontSize: 21, fontWeight: '900', color: HeronColors.primary, letterSpacing: -0.4 },
+  sheetSub: { marginTop: 3, fontSize: 13, color: HeronColors.granite },
+  sheetStepper: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14, marginTop: 18 },
+  sheetStepBtn: { width: 46, height: 46, borderRadius: 23, backgroundColor: HeronColors.brandLight, alignItems: 'center', justifyContent: 'center' },
+  sheetStepText: { fontSize: 24, fontWeight: '800', color: HeronColors.brand, lineHeight: 28 },
+  sheetInputBox: { alignItems: 'center', minWidth: 120 },
+  sheetInput: { minWidth: 110, paddingVertical: 2, paddingHorizontal: 10, borderRadius: 14, borderWidth: 1.5, borderColor: HeronColors.border, backgroundColor: HeronColors.cardAlt, textAlign: 'center', fontSize: 34, fontWeight: '900', color: HeronColors.primary, fontVariant: ['tabular-nums'] },
+  sheetAdjust: { marginTop: 8, textAlign: 'center', fontSize: 12, fontWeight: '700', color: HeronColors.amber },
+  sheetUnit: { fontSize: 11, fontWeight: '700', color: HeronColors.granite, marginTop: 4 },
+  sheetChips: { flexDirection: 'row', gap: 6, marginTop: 16 },
+  sheetChip: { flex: 1, height: 36, borderRadius: Radius.full, borderWidth: 1, borderColor: HeronColors.border, backgroundColor: HeronColors.cardAlt, alignItems: 'center', justifyContent: 'center' },
+  sheetChipOn: { backgroundColor: HeronColors.primary, borderColor: HeronColors.primary },
+  sheetChipText: { fontSize: 13, fontWeight: '800', color: HeronColors.secondary },
+  sheetChipTextOn: { color: '#FFFFFF' },
+  sheetTotal: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, padding: 12, borderRadius: 14, backgroundColor: HeronColors.brandLight },
+  sheetTotalLabel: { fontSize: 13, fontWeight: '700', color: HeronColors.secondary },
+  sheetTotalValue: { fontSize: 17, fontWeight: '900', color: HeronColors.brandHover, fontVariant: ['tabular-nums'] },
+  sheetNote: { marginTop: 8, fontSize: 12, lineHeight: 17, color: HeronColors.granite },
+  sheetActions: { flexDirection: 'row', gap: 10, marginTop: 18 },
   removeBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: HeronColors.cardAlt, alignItems: 'center', justifyContent: 'center' },
   remove: { fontSize: 12, fontWeight: '800', color: HeronColors.granite },
   addText: { fontSize: 13, fontWeight: '800', color: HeronColors.brand },

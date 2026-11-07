@@ -1,5 +1,6 @@
 // Meal journal / plan on the CookFlow API. Entries:
-// { id, date: 'YYYY-MM-DD', slot, recipeId|null, title, calories|null, servings, eaten, note, createdAt (ms) }
+// { id, date: 'YYYY-MM-DD', slot, recipeId|null, title, calories|null, servings, portionsEaten, eaten, note, createdAt (ms) }
+// servings = portions cooked (shopping list); portionsEaten = portions the user ate (kcal = calories × portionsEaten).
 // `today` is the phone's calendar day: the server uses it to decide "eaten" for past days.
 import { apiRequest } from './client';
 import { dateKey } from '../../utils/mealPlan';
@@ -8,8 +9,8 @@ const BASE = '/api/meal-plans';
 
 export const fetchMealPlan = async ({ from, to } = {}) => (await apiRequest(BASE, { query: { from, to } })).entries;
 
-export const createMealEntry = async ({ date, slot, recipeId, title, calories, servings, eaten, note }) =>
-  (await apiRequest(BASE, { method: 'POST', body: { date, slot, recipeId, title, calories, servings, eaten, note, today: dateKey() } })).entry;
+export const createMealEntry = async ({ date, slot, recipeId, title, calories, servings, portionsEaten, eaten, note }) =>
+  (await apiRequest(BASE, { method: 'POST', body: { date, slot, recipeId, title, calories, servings, portionsEaten, eaten, note, today: dateKey() } })).entry;
 
 export const updateMealEntry = async (id, patch) => (await apiRequest(`${BASE}/${id}`, { method: 'PATCH', body: patch })).entry;
 
